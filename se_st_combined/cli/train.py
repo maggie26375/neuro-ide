@@ -211,9 +211,10 @@ def setup_callbacks(cfg: DictConfig):
         monitor="val_loss",
         mode="min",
         save_top_k=cfg.get('save_top_k', 3),
-        save_last=True,
+        save_last=False,  # ← Don't save last.ckpt every validation (saves disk space!)
         verbose=True,
         every_n_train_steps=cfg.training.get('ckpt_every_n_steps', 1000),
+        save_on_train_epoch_end=False,  # Only save on validation, not every epoch
     )
     callbacks.append(checkpoint_callback)
     
