@@ -153,15 +153,16 @@ class PerturbationDataset(Dataset):
         # Load perturbation embeddings (ESM2 features)
         self.pert_embedding_map = self._load_perturbation_embeddings()
         
-        # Storage for all pairs
-        self.pairs: List[Dict] = []
+        # Storage for sentence metadata (indices only, not data!)
+        # Each item: {h5_path, data_key, pert_indices, ctrl_indices, pert_emb, metadata}
+        self.sentence_specs: List[Dict] = []
         
-        # Create pairs from H5 files
+        # Create sentence specifications from H5 files
         self._setup_datasets()
         
-        logger.info(f"✅ Dataset created with {len(self.pairs)} pairs for split '{self.split}'")
-        if len(self.pairs) == 0:
-            logger.error("❌ No pairs created!")
+        logger.info(f"✅ Dataset created with {len(self.sentence_specs)} sentences for split '{self.split}'")
+        if len(self.sentence_specs) == 0:
+            logger.error("❌ No sentences created!")
     
     def _load_toml_config(self) -> Dict:
         """Load TOML configuration file."""
@@ -373,80 +374,27 @@ class PerturbationDataset(Dataset):
                 if len(pert_indices) == 0 or len(ctrl_cells) == 0:
                     continue
                 
-                # Sample cell_sentence_len cells for both pert and ctrl
-                # Use replacement if not enough cells (matching STATE's behavior)
-                replace_pert = len(pert_indices) < self.cell_sentence_len
-                replace_ctrl = len(ctrl_cells) < self.cell_sentence_len
-                
-                sampled_pert_indices = self.rng.choice(
-                    pert_indices, size=self.cell_sentence_len, replace=replace_pert
-                )
-                sampled_ctrl_indices = self.rng.choice(
-                    ctrl_cells, size=self.cell_sentence_len, replace=replace_ctrl
-                )
-                
-                # Read only the sampled cells from H5 (memory efficient!)
-                with h5py.File(h5_path, "r") as f:
-                    ctrl_cell_embeddings = torch.tensor(
-                        f[data_key][sampled_ctrl_indices], dtype=torch.float32
-                    )  # Shape: [cell_sentence_len, gene_dim]
-                    
-                    pert_cell_embeddings = torch.tensor(
-                        f[data_key][sampled_pert_indices], dtype=torch.float32
-                    )  # Shape: [cell_sentence_len, gene_dim]
-                
-                # Repeat perturbation embedding for each cell in the sentence
-                pert_embeddings = pert_emb.unsqueeze(0).repeat(self.cell_sentence_len, 1)
-                # Shape: [cell_sentence_len, pert_dim]
-                
-                sentence = {
-                    'ctrl_cell_emb': ctrl_cell_embeddings,
-                    'pert_cell_emb': pert_cell_embeddings,
-                    'pert_embedding': pert_embeddings,
+                # ✅ MEMORY FIX: Store only indices, not data!
+                # Data will be loaded on-demand in __getitem__
+                sentence_spec = {
+                    'h5_path': h5_path,
+                    'data_key': data_key,
+                    'pert_indices': pert_indices,  # All available perturbed cell indices
+                    'ctrl_indices': ctrl_cells,    # All available control cell indices
+                    'pert_emb': pert_emb,
                     'perturbation': pert_name,
                     'cell_type': cell_type,
                     'batch': batch_name,
                 }
-                self.pairs.append(sentence)
+                self.sentence_specs.append(sentence_spec)
                 n_pairs_created += 1
                 
-                # Create multiple sentences if we have enough cells
-                # Each perturbation/context can create multiple non-overlapping sentences
-                # Calculate how many additional sentences we can create
-                remaining_pert = len(pert_indices) - self.cell_sentence_len
-                remaining_ctrl = len(ctrl_cells) - self.cell_sentence_len
-                
-                # Create additional sentences (up to 10 per perturbation/context to avoid explosion)
-                max_additional = min(10, remaining_pert // self.cell_sentence_len, remaining_ctrl // self.cell_sentence_len)
+                # Create additional sentence specs (up to 10) if enough cells
+                # This gives multiple views of the same perturbation/context
+                max_additional = min(10, len(pert_indices) // self.cell_sentence_len, len(ctrl_cells) // self.cell_sentence_len)
                 for _ in range(max_additional):
-                    # Sample different cells
-                    sampled_pert_indices = self.rng.choice(
-                        pert_indices, size=self.cell_sentence_len, replace=replace_pert
-                    )
-                    sampled_ctrl_indices = self.rng.choice(
-                        ctrl_cells, size=self.cell_sentence_len, replace=replace_ctrl
-                    )
-                    
-                    # Read only the sampled cells from H5 (memory efficient!)
-                    with h5py.File(h5_path, "r") as f:
-                        ctrl_cell_embeddings = torch.tensor(
-                            f[data_key][sampled_ctrl_indices], dtype=torch.float32
-                        )
-                        pert_cell_embeddings = torch.tensor(
-                            f[data_key][sampled_pert_indices], dtype=torch.float32
-                        )
-                    
-                    pert_embeddings = pert_emb.unsqueeze(0).repeat(self.cell_sentence_len, 1)
-                    
-                    sentence = {
-                        'ctrl_cell_emb': ctrl_cell_embeddings,
-                        'pert_cell_emb': pert_cell_embeddings,
-                        'pert_embedding': pert_embeddings,
-                        'perturbation': pert_name,
-                        'cell_type': cell_type,
-                        'batch': batch_name,
-                    }
-                    self.pairs.append(sentence)
+                    # Reuse the same spec (random sampling happens in __getitem__)
+                    self.sentence_specs.append(sentence_spec.copy())
                     n_pairs_created += 1
         
         logger.info(f"Created {n_pairs_created} pairs from {Path(h5_path).name}")
@@ -478,10 +426,47 @@ class PerturbationDataset(Dataset):
         return None
     
     def __len__(self) -> int:
-        return len(self.pairs)
+        return len(self.sentence_specs)
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        return self.pairs[idx]
+        """Dynamically create sentence by reading H5 on-demand."""
+        spec = self.sentence_specs[idx]
+        
+        # Open H5 file and read only the required cells
+        with h5py.File(spec['h5_path'], 'r') as h5_file:
+            X = h5_file[spec['data_key']]
+            
+            # Read perturbed cells
+            pert_indices = spec['pert_indices']
+            if len(pert_indices) == self.cell_sentence_len:
+                pert_cells = X[pert_indices, :]
+            else:
+                # Sample with replacement
+                sampled = np.random.choice(pert_indices, size=self.cell_sentence_len, replace=True)
+                pert_cells = X[sampled, :]
+            
+            # Read control cells
+            ctrl_indices = spec['ctrl_indices']
+            if len(ctrl_indices) >= self.cell_sentence_len:
+                sampled = np.random.choice(ctrl_indices, size=self.cell_sentence_len, replace=False)
+            else:
+                sampled = np.random.choice(ctrl_indices, size=self.cell_sentence_len, replace=True)
+            ctrl_cells = X[sampled, :]
+            
+            # Convert to dense if needed
+            if hasattr(pert_cells, 'toarray'):
+                pert_cells = pert_cells.toarray()
+            if hasattr(ctrl_cells, 'toarray'):
+                ctrl_cells = ctrl_cells.toarray()
+        
+        return {
+            'ctrl_cell_emb': torch.from_numpy(ctrl_cells).float(),  # [cell_sentence_len, gene_dim]
+            'pert_cell_emb': torch.from_numpy(pert_cells).float(),  # [cell_sentence_len, gene_dim]
+            'pert_emb': spec['pert_emb'].unsqueeze(0).expand(self.cell_sentence_len, -1),  # [cell_sentence_len, pert_dim]
+            'perturbation': spec['perturbation'],
+            'cell_type': spec['cell_type'],
+            'batch': spec['batch'],
+        }
 
 
 def collate_perturbation_batch(batch: List[Dict]) -> Dict[str, torch.Tensor]:
