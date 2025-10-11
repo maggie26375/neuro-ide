@@ -112,7 +112,8 @@ class SE_ST_CombinedModel(PerturbationModel):
             from se_st_combined.utils.se_inference import SEInference
             
             # Load SE model
-            self.se_inference = SEInference()
+            # Use input_dim (gene dimension) to create SE model
+            self.se_inference = SEInference(input_dim=self.input_dim, output_dim=512)
             self.se_inference.load_model(self.se_checkpoint_path)
             self.se_model = self.se_inference.model
             

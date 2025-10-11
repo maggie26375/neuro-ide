@@ -23,9 +23,11 @@ class SEInference:
     3. Handle the actual SE model inference
     """
     
-    def __init__(self):
+    def __init__(self, input_dim: int = 2000, output_dim: int = 512):
         self.model = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.input_dim = input_dim
+        self.output_dim = output_dim
     
     def load_model(self, checkpoint_path: str):
         """
@@ -39,9 +41,9 @@ class SEInference:
             logger.warning("SE model loading is not implemented in this simplified version.")
             logger.warning("Please install the actual SE model package and implement proper loading.")
             
-            # Create a dummy model for demonstration
-            self.model = DummySEModel()
-            logger.info(f"Dummy SE model loaded (checkpoint: {checkpoint_path})")
+            # Create a dummy model for demonstration with correct dimensions
+            self.model = DummySEModel(input_dim=self.input_dim, output_dim=self.output_dim)
+            logger.info(f"Dummy SE model loaded (checkpoint: {checkpoint_path}, input_dim={self.input_dim}, output_dim={self.output_dim})")
             
         except Exception as e:
             logger.error(f"Failed to load SE model: {e}")
