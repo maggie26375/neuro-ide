@@ -1,8 +1,49 @@
-name: se_st_combined
-checkpoint: null
-device: cuda
+# Experiment Configuration
+name: se_st_experiment
+output_dir: ./outputs
+accelerator: auto  # auto, gpu, cpu
+devices: auto  # Number of devices or "auto"
+save_top_k: 3  # Save top k checkpoints
 
-kwargs:
+# Training Configuration
+training:
+  max_steps: 40000
+  max_epochs: null  # If set, will override max_steps
+  batch_size: 16
+  lr: 1e-4
+  ckpt_every_n_steps: 20000
+  log_every_n_steps: 100
+  val_check_interval: 1000
+  precision: "16-mixed"  # 16-mixed, 32, bf16-mixed
+  gradient_clip_val: null
+  accumulate_grad_batches: 1
+  early_stopping: false
+  patience: 10
+
+# Data Configuration
+data:
+  kwargs:
+    toml_config_path: null  # Path to data TOML config
+    num_workers: 8
+    batch_col: batch_var
+    pert_col: target_gene
+    cell_type_key: cell_type
+    control_pert: non-targeting
+    perturbation_features_file: null  # Path to perturbation features file
+
+# Logging Configuration
+wandb:
+  enabled: false
+  project: se-st-combined
+  entity: null
+  tags: []
+
+# Model Configuration
+model:
+  name: se_st_combined
+  checkpoint: null
+  
+  kwargs:
   # SE Model Configuration
   se_model_path: "/large_storage/ctc/userspace/aadduri/SE-600M"  # Path to SE model directory
   se_checkpoint_path: "/large_storage/ctc/userspace/aadduri/SE-600M/se600m_epoch15.ckpt"  # Path to SE checkpoint
