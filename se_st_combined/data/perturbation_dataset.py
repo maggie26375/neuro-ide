@@ -2,12 +2,14 @@
 Perturbation Dataset for SE+ST Training
 
 Loads single-cell perturbation data from H5 files based on TOML configuration.
+Handles control/perturbation pairing for perturbation prediction tasks.
 """
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 import glob
+import random
 
 import torch
 from torch.utils.data import Dataset
@@ -18,9 +20,72 @@ import tomli
 logger = logging.getLogger(__name__)
 
 
+class AnnDataH5Reader:
+    """Helper class to read AnnData H5 files with categorical data support."""
+    
+    def __init__(self, h5_path: str):
+        self.h5_path = Path(h5_path)
+        self.h5_file = None
+        
+    def __enter__(self):
+        self.h5_file = h5py.File(self.h5_path, 'r')
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.h5_file:
+            self.h5_file.close()
+    
+    def read_categorical(self, group_path: str) -> np.ndarray:
+        """Read categorical data from H5 group."""
+        try:
+            group = self.h5_file[group_path]
+            if isinstance(group, h5py.Group):
+                if 'codes' in group and 'categories' in group:
+                    # Categorical format: codes index into categories
+                    codes = np.array(group['codes'])
+                    categories = np.array(group['categories'])
+                    # Decode bytes to strings
+                    if categories.dtype.kind == 'S':
+                        categories = np.array([c.decode('utf-8') for c in categories])
+                    # Map codes to categories
+                    result = categories[codes]
+                    return result
+                elif 'values' in group:
+                    # Direct values
+                    values = np.array(group['values'])
+                    if values.dtype.kind == 'S':
+                        values = np.array([v.decode('utf-8') for v in values])
+                    return values
+            else:
+                # Direct dataset
+                data = np.array(group)
+                if data.dtype.kind == 'S':
+                    data = np.array([d.decode('utf-8') for d in data])
+                return data
+        except Exception as e:
+            logger.error(f"Error reading categorical from {group_path}: {e}")
+            raise
+    
+    def read_expression_matrix(self) -> np.ndarray:
+        """Read expression matrix X."""
+        if 'X' in self.h5_file:
+            return np.array(self.h5_file['X'])
+        else:
+            raise KeyError("No expression matrix 'X' found in H5 file")
+    
+    def get_n_cells(self) -> int:
+        """Get number of cells."""
+        return self.h5_file['X'].shape[0]
+    
+    def get_n_genes(self) -> int:
+        """Get number of genes."""
+        return self.h5_file['X'].shape[1]
+
+
 class PerturbationDataset(Dataset):
     """
     Dataset for loading single-cell perturbation data from H5 files.
+    Creates control/perturbation pairs for training.
     
     Args:
         toml_config_path: Path to TOML configuration file
@@ -30,6 +95,8 @@ class PerturbationDataset(Dataset):
         pert_col: Column name for perturbation/gene target
         cell_type_key: Key for cell type annotation
         control_pert: Name of control perturbation (e.g., 'non-targeting')
+        n_ctrl_samples: Number of control cells to sample per perturbation
+        n_pert_samples: Number of perturbed cells to sample per pair
     """
     
     def __init__(
@@ -41,6 +108,8 @@ class PerturbationDataset(Dataset):
         pert_col: str = "target_gene",
         cell_type_key: str = "cell_type",
         control_pert: str = "non-targeting",
+        n_ctrl_samples: int = 20,
+        n_pert_samples: int = 20,
         data_dir: Optional[str] = None,
     ):
         super().__init__()
@@ -51,6 +120,8 @@ class PerturbationDataset(Dataset):
         self.pert_col = pert_col
         self.cell_type_key = cell_type_key
         self.control_pert = control_pert
+        self.n_ctrl_samples = n_ctrl_samples
+        self.n_pert_samples = n_pert_samples
         
         # Determine data directory
         if data_dir is None:
@@ -64,10 +135,10 @@ class PerturbationDataset(Dataset):
         # Load perturbation embeddings
         self.pert_embeddings = self._load_perturbation_embeddings()
         
-        # Load data from H5 files
-        self.data = self._load_h5_data()
+        # Load data from H5 files and create pairs
+        self.pairs = self._load_and_create_pairs()
         
-        logger.info(f"Loaded {len(self)} samples for split '{split}'")
+        logger.info(f"Created {len(self)} control/perturbation pairs for split '{split}'")
     
     def _load_toml_config(self) -> Dict:
         """Load TOML configuration file."""
@@ -116,18 +187,16 @@ class PerturbationDataset(Dataset):
         expanded = list(Path(self.data_dir).glob(pattern))
         return expanded
     
-    def _load_h5_data(self) -> List[Dict]:
-        """Load data from H5 files based on TOML configuration."""
-        data_samples = []
+    def _load_and_create_pairs(self) -> List[Dict]:
+        """Load data from H5 files and create control/perturbation pairs."""
+        pairs = []
         
         # Get dataset configurations
         datasets = self.config.get("datasets", {})
-        training_config = self.config.get("training", {})
         zeroshot_config = self.config.get("zeroshot", {})
         
         for dataset_name, file_pattern in datasets.items():
             logger.info(f"Processing dataset: {dataset_name}")
-            logger.info(f"File pattern: {file_pattern}")
             
             # Expand file pattern to get actual files
             h5_files = self._expand_file_pattern(file_pattern)
@@ -136,20 +205,18 @@ class PerturbationDataset(Dataset):
                 logger.warning(f"No H5 files found for pattern: {file_pattern}")
                 continue
             
-            logger.info(f"Found {len(h5_files)} H5 files: {[f.name for f in h5_files]}")
+            logger.info(f"Found {len(h5_files)} H5 files")
             
             # Load each H5 file
             for h5_file in h5_files:
-                cell_type = h5_file.stem  # e.g., "k562" from "k562.h5"
+                cell_type = h5_file.stem
                 full_key = f"{dataset_name}.{cell_type}"
                 
                 # Check if this cell type should be in current split
                 zeroshot_split = zeroshot_config.get(full_key, None)
                 
-                # Determine if this file belongs to current split
                 should_include = False
                 if self.split == "train":
-                    # Include if not in zeroshot test
                     should_include = (zeroshot_split != "test")
                 elif self.split == "val":
                     should_include = (zeroshot_split == "val")
@@ -160,96 +227,139 @@ class PerturbationDataset(Dataset):
                     logger.info(f"Skipping {cell_type} for split {self.split}")
                     continue
                 
-                # Load H5 file
+                # Load and create pairs from this file
                 logger.info(f"Loading {h5_file.name} for {self.split} split")
-                file_samples = self._load_single_h5(h5_file, cell_type)
-                data_samples.extend(file_samples)
-                logger.info(f"Loaded {len(file_samples)} samples from {h5_file.name}")
+                file_pairs = self._load_and_pair_single_h5(h5_file, cell_type)
+                pairs.extend(file_pairs)
+                logger.info(f"Created {len(file_pairs)} pairs from {h5_file.name}")
         
-        return data_samples
+        return pairs
     
-    def _load_single_h5(self, h5_file: Path, cell_type: str) -> List[Dict]:
-        """Load data from a single H5 file."""
-        samples = []
+    def _load_and_pair_single_h5(self, h5_file: Path, cell_type: str) -> List[Dict]:
+        """
+        Load data from a single H5 file and create control/perturbation pairs.
+        
+        Returns:
+            List of pairs, each containing control and perturbed cell sets
+        """
+        pairs = []
         
         try:
-            with h5py.File(h5_file, "r") as f:
-                # Try to load data in standard formats
-                # Common keys: 'X', 'obs', 'var', 'obsm', 'varm', 'uns'
-                
+            with AnnDataH5Reader(h5_file) as reader:
                 # Load expression matrix
-                if "X" in f:
-                    X = np.array(f["X"])
-                elif "data" in f:
-                    X = np.array(f["data"])
-                else:
-                    logger.warning(f"No expression data found in {h5_file.name}")
-                    return samples
+                X = reader.read_expression_matrix()
+                n_cells, n_genes = X.shape
                 
                 # Load metadata
-                obs_data = {}
-                if "obs" in f:
-                    obs_group = f["obs"]
-                    for key in obs_group.keys():
-                        obs_data[key] = np.array(obs_group[key])
+                target_genes = reader.read_categorical(f'obs/{self.pert_col}')
                 
-                # Create samples (one per cell)
-                n_cells = X.shape[0]
+                # Try to load batch info
+                try:
+                    batches = reader.read_categorical(f'obs/{self.batch_col}')
+                except:
+                    batches = np.array(['batch_0'] * n_cells)
+                    logger.warning(f"No batch info found, using single batch")
+                
+                # Organize cells by perturbation and batch
+                cell_indices_by_pert_batch = {}
+                
                 for i in range(n_cells):
-                    sample = {
-                        "expression": torch.tensor(X[i], dtype=torch.float32),
-                        "cell_type": cell_type,
-                    }
+                    pert = target_genes[i]
+                    batch = batches[i]
+                    key = (pert, batch)
                     
-                    # Add perturbation info if available
-                    if self.pert_col in obs_data:
-                        pert_name = obs_data[self.pert_col][i]
-                        if isinstance(pert_name, bytes):
-                            pert_name = pert_name.decode("utf-8")
-                        sample["perturbation"] = pert_name
+                    if key not in cell_indices_by_pert_batch:
+                        cell_indices_by_pert_batch[key] = []
+                    cell_indices_by_pert_batch[key].append(i)
+                
+                # Get all unique perturbations (excluding control)
+                all_perts = set(target_genes)
+                perturbations = [p for p in all_perts if p != self.control_pert]
+                
+                logger.info(f"Found {len(perturbations)} perturbations and {len(all_perts)} total conditions")
+                
+                # Create pairs for each perturbation
+                for pert in perturbations:
+                    # Skip if no embedding available
+                    if pert not in self.pert_embeddings:
+                        logger.warning(f"No embedding found for {pert}, skipping")
+                        continue
+                    
+                    # Find all batches that have this perturbation
+                    pert_batches = [batch for (p, batch) in cell_indices_by_pert_batch.keys() if p == pert]
+                    
+                    for batch in pert_batches:
+                        # Get perturbed cells
+                        pert_key = (pert, batch)
+                        if pert_key not in cell_indices_by_pert_batch:
+                            continue
+                        pert_indices = cell_indices_by_pert_batch[pert_key]
                         
-                        # Add perturbation embedding
-                        if pert_name in self.pert_embeddings:
-                            sample["pert_embedding"] = self.pert_embeddings[pert_name]
-                    
-                    # Add batch info if available
-                    if self.batch_col in obs_data:
-                        sample["batch"] = obs_data[self.batch_col][i]
-                    
-                    samples.append(sample)
+                        # Get control cells from same batch
+                        ctrl_key = (self.control_pert, batch)
+                        if ctrl_key not in cell_indices_by_pert_batch:
+                            # Try to find control from any batch
+                            ctrl_indices = []
+                            for (p, b) in cell_indices_by_pert_batch.keys():
+                                if p == self.control_pert:
+                                    ctrl_indices.extend(cell_indices_by_pert_batch[(p, b)])
+                            if not ctrl_indices:
+                                logger.warning(f"No control cells found for {pert} in {batch}")
+                                continue
+                        else:
+                            ctrl_indices = cell_indices_by_pert_batch[ctrl_key]
+                        
+                        # Sample cells
+                        n_ctrl_available = len(ctrl_indices)
+                        n_pert_available = len(pert_indices)
+                        
+                        n_ctrl = min(self.n_ctrl_samples, n_ctrl_available)
+                        n_pert = min(self.n_pert_samples, n_pert_available)
+                        
+                        if n_ctrl < 5 or n_pert < 5:
+                            # Skip if too few cells
+                            continue
+                        
+                        # Sample with replacement if needed
+                        sampled_ctrl_indices = np.random.choice(ctrl_indices, size=n_ctrl, replace=(n_ctrl > n_ctrl_available))
+                        sampled_pert_indices = np.random.choice(pert_indices, size=n_pert, replace=(n_pert > n_pert_available))
+                        
+                        # Create pair
+                        pair = {
+                            'ctrl_cell_emb': torch.tensor(X[sampled_ctrl_indices], dtype=torch.float32),
+                            'pert_cell_emb': torch.tensor(X[sampled_pert_indices], dtype=torch.float32),
+                            'pert_embedding': self.pert_embeddings[pert],
+                            'perturbation': pert,
+                            'cell_type': cell_type,
+                            'batch': batch,
+                        }
+                        
+                        pairs.append(pair)
         
         except Exception as e:
             logger.error(f"Error loading {h5_file}: {e}")
             logger.exception("Full traceback:")
         
-        return samples
+        return pairs
     
     def __len__(self) -> int:
-        return len(self.data)
+        return len(self.pairs)
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        """Get a single sample."""
-        sample = self.data[idx]
+        """Get a single control/perturbation pair."""
+        pair = self.pairs[idx]
         
-        # Convert numpy arrays to tensors if needed
-        output = {}
-        for key, value in sample.items():
-            if isinstance(value, np.ndarray):
-                output[key] = torch.tensor(value, dtype=torch.float32)
-            elif isinstance(value, torch.Tensor):
-                output[key] = value
-            else:
-                output[key] = value
-        
-        return output
+        # Pairs are already in the correct format with tensors
+        return pair
 
 
 def collate_perturbation_batch(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     """
     Collate function for perturbation dataset.
+    Handles variable-sized cell sets by concatenating them.
     
     Args:
-        batch: List of samples from dataset
+        batch: List of pairs from dataset
         
     Returns:
         Dictionary with batched tensors
@@ -257,25 +367,28 @@ def collate_perturbation_batch(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     if not batch:
         return {}
     
-    # Initialize output dictionary
-    output = {}
+    # Concatenate control cells from all pairs in batch
+    ctrl_cells = torch.cat([pair['ctrl_cell_emb'] for pair in batch], dim=0)
     
-    # Get all keys from first sample
-    keys = batch[0].keys()
+    # Concatenate perturbed cells from all pairs in batch
+    pert_cells = torch.cat([pair['pert_cell_emb'] for pair in batch], dim=0)
     
-    for key in keys:
-        values = [sample[key] for sample in batch]
-        
-        # Stack tensors
-        if isinstance(values[0], torch.Tensor):
-            try:
-                output[key] = torch.stack(values)
-            except:
-                # If stacking fails, keep as list
-                output[key] = values
-        else:
-            # Keep non-tensor values as list
-            output[key] = values
+    # Stack perturbation embeddings
+    pert_embeddings = torch.stack([pair['pert_embedding'] for pair in batch])
+    
+    # Collect metadata
+    perturbations = [pair['perturbation'] for pair in batch]
+    cell_types = [pair['cell_type'] for pair in batch]
+    batches = [pair['batch'] for pair in batch]
+    
+    output = {
+        'ctrl_cell_emb': ctrl_cells,
+        'pert_cell_emb': pert_cells,
+        'pert_embedding': pert_embeddings,
+        'perturbation': perturbations,
+        'cell_type': cell_types,
+        'batch': batches,
+    }
     
     return output
 
