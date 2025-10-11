@@ -101,8 +101,12 @@ def main():
                        help="Wandb project name")
     parser.add_argument("--wandb_entity", type=str, default=None,
                        help="Wandb entity name")
+    parser.add_argument("--wandb_tags", type=str, default=None,
+                       help="Wandb tags (comma-separated)")
     parser.add_argument("--experiment_name", type=str, default="se_st_experiment",
                        help="Experiment name")
+    parser.add_argument("--no_wandb", action="store_true",
+                       help="Disable wandb logging")
     
     args = parser.parse_args()
     
@@ -136,12 +140,25 @@ def main():
     
     # Setup logging
     logger.info("Setting up logging...")
-    wandb_logger = WandbLogger(
-        project=args.wandb_project,
-        entity=args.wandb_entity,
-        name=args.experiment_name,
-        save_dir=str(output_dir),
-    )
+    
+    # Parse wandb tags if provided
+    wandb_tags = None
+    if args.wandb_tags:
+        wandb_tags = [tag.strip() for tag in args.wandb_tags.split(',')]
+    
+    # Initialize wandb logger (unless disabled)
+    if not args.no_wandb:
+        wandb_logger = WandbLogger(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=args.experiment_name,
+            save_dir=str(output_dir),
+            tags=wandb_tags,
+        )
+        logger.info(f"Wandb logging enabled - Project: {args.wandb_project}, Entity: {args.wandb_entity}")
+    else:
+        wandb_logger = None
+        logger.info("Wandb logging disabled")
     
     # Setup callbacks
     checkpoint_callback = ModelCheckpoint(
@@ -164,7 +181,7 @@ def main():
     logger.info("Initializing trainer...")
     trainer = L.Trainer(
         max_steps=args.max_steps,
-        logger=wandb_logger,
+        logger=wandb_logger if wandb_logger else None,
         callbacks=[checkpoint_callback, early_stopping],
         default_root_dir=str(output_dir),
         accelerator="auto",
