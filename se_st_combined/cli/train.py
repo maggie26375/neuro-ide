@@ -20,6 +20,9 @@ from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
 from se_st_combined.models.se_st_combined import SE_ST_CombinedModel
 from se_st_combined.models.state_transition import StateTransitionPerturbationModel
 
+# Import data utilities
+from se_st_combined.data.perturbation_dataset import PerturbationDataset, collate_perturbation_batch
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -58,25 +61,114 @@ class SE_ST_DataModule(LightningDataModule):
         self.control_pert = control_pert
         self.kwargs = kwargs
         
+        # Datasets will be created in setup()
+        self.train_dataset = None
+        self.val_dataset = None
+        self.test_dataset = None
+        
     def setup(self, stage: str = None):
         """Setup data for training/validation."""
         logger.info(f"Setting up data from {self.toml_config_path}")
-        logger.warning("This is a simplified data module. Please implement proper data loading.")
-        logger.warning("For production use, integrate with your actual data loading pipeline.")
+        
+        # Create train dataset
+        if stage == "fit" or stage is None:
+            logger.info("Creating training dataset...")
+            self.train_dataset = PerturbationDataset(
+                toml_config_path=self.toml_config_path,
+                perturbation_features_file=self.perturbation_features_file,
+                split="train",
+                batch_col=self.batch_col,
+                pert_col=self.pert_col,
+                cell_type_key=self.cell_type_key,
+                control_pert=self.control_pert,
+            )
+            logger.info(f"Training dataset created with {len(self.train_dataset)} samples")
+            
+            # Create validation dataset
+            logger.info("Creating validation dataset...")
+            self.val_dataset = PerturbationDataset(
+                toml_config_path=self.toml_config_path,
+                perturbation_features_file=self.perturbation_features_file,
+                split="val",
+                batch_col=self.batch_col,
+                pert_col=self.pert_col,
+                cell_type_key=self.cell_type_key,
+                control_pert=self.control_pert,
+            )
+            
+            # If no val data, use a subset of train data for validation
+            if len(self.val_dataset) == 0:
+                logger.warning("No validation data found, using test split for validation")
+                self.val_dataset = PerturbationDataset(
+                    toml_config_path=self.toml_config_path,
+                    perturbation_features_file=self.perturbation_features_file,
+                    split="test",
+                    batch_col=self.batch_col,
+                    pert_col=self.pert_col,
+                    cell_type_key=self.cell_type_key,
+                    control_pert=self.control_pert,
+                )
+            
+            logger.info(f"Validation dataset created with {len(self.val_dataset)} samples")
+        
+        # Create test dataset
+        if stage == "test" or stage is None:
+            logger.info("Creating test dataset...")
+            self.test_dataset = PerturbationDataset(
+                toml_config_path=self.toml_config_path,
+                perturbation_features_file=self.perturbation_features_file,
+                split="test",
+                batch_col=self.batch_col,
+                pert_col=self.pert_col,
+                cell_type_key=self.cell_type_key,
+                control_pert=self.control_pert,
+            )
+            logger.info(f"Test dataset created with {len(self.test_dataset)} samples")
         
     def train_dataloader(self):
         """Return training dataloader."""
-        # TODO: Implement actual data loading based on your data format
-        # This is a placeholder that returns an empty dataloader
-        logger.warning("Using placeholder train dataloader - implement actual data loading!")
-        return DataLoader([], batch_size=self.batch_size, num_workers=self.num_workers)
+        if self.train_dataset is None:
+            logger.error("Train dataset not initialized! Call setup() first.")
+            return DataLoader([], batch_size=self.batch_size, num_workers=0)
+        
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            shuffle=True,
+            collate_fn=collate_perturbation_batch,
+            pin_memory=True,
+        )
     
     def val_dataloader(self):
         """Return validation dataloader."""
-        # TODO: Implement actual data loading based on your data format
-        # This is a placeholder that returns an empty dataloader
-        logger.warning("Using placeholder val dataloader - implement actual data loading!")
-        return DataLoader([], batch_size=self.batch_size, num_workers=self.num_workers)
+        if self.val_dataset is None:
+            logger.error("Val dataset not initialized! Call setup() first.")
+            return DataLoader([], batch_size=self.batch_size, num_workers=0)
+        
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            shuffle=False,
+            collate_fn=collate_perturbation_batch,
+            pin_memory=True,
+        )
+    
+    def test_dataloader(self):
+        """Return test dataloader."""
+        if self.test_dataset is None:
+            logger.error("Test dataset not initialized! Call setup() first.")
+            return DataLoader([], batch_size=self.batch_size, num_workers=0)
+        
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            shuffle=False,
+            collate_fn=collate_perturbation_batch,
+            pin_memory=True,
+        )
 
 
 def setup_logger(cfg: DictConfig):
