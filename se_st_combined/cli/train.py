@@ -11,9 +11,14 @@ import hydra
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 import torch
-from lightning.pytorch import Trainer
+from torch.utils.data import DataLoader
+from lightning.pytorch import Trainer, LightningDataModule
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
+
+# Import model classes
+from se_st_combined.models.se_st_combined import SE_ST_CombinedModel
+from se_st_combined.models.state_transition import StateTransitionPerturbationModel
 
 # Configure logging
 logging.basicConfig(
@@ -25,6 +30,53 @@ logger = logging.getLogger(__name__)
 # Set environment variable to disable Hydra struct checking
 import os
 os.environ['HYDRA_FULL_ERROR'] = '1'
+
+
+class SE_ST_DataModule(LightningDataModule):
+    """Data module for SE+ST training with Hydra configuration."""
+    
+    def __init__(
+        self,
+        toml_config_path: str,
+        perturbation_features_file: str,
+        batch_size: int = 16,
+        num_workers: int = 4,
+        batch_col: str = "batch_var",
+        pert_col: str = "target_gene",
+        cell_type_key: str = "cell_type",
+        control_pert: str = "non-targeting",
+        **kwargs
+    ):
+        super().__init__()
+        self.toml_config_path = toml_config_path
+        self.perturbation_features_file = perturbation_features_file
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.batch_col = batch_col
+        self.pert_col = pert_col
+        self.cell_type_key = cell_type_key
+        self.control_pert = control_pert
+        self.kwargs = kwargs
+        
+    def setup(self, stage: str = None):
+        """Setup data for training/validation."""
+        logger.info(f"Setting up data from {self.toml_config_path}")
+        logger.warning("This is a simplified data module. Please implement proper data loading.")
+        logger.warning("For production use, integrate with your actual data loading pipeline.")
+        
+    def train_dataloader(self):
+        """Return training dataloader."""
+        # TODO: Implement actual data loading based on your data format
+        # This is a placeholder that returns an empty dataloader
+        logger.warning("Using placeholder train dataloader - implement actual data loading!")
+        return DataLoader([], batch_size=self.batch_size, num_workers=self.num_workers)
+    
+    def val_dataloader(self):
+        """Return validation dataloader."""
+        # TODO: Implement actual data loading based on your data format
+        # This is a placeholder that returns an empty dataloader
+        logger.warning("Using placeholder val dataloader - implement actual data loading!")
+        return DataLoader([], batch_size=self.batch_size, num_workers=self.num_workers)
 
 
 def setup_logger(cfg: DictConfig):
@@ -145,29 +197,51 @@ def train_main(cfg: DictConfig):
     logger.info("Trainer initialized")
     logger.info(f"Device: {cfg.get('accelerator', 'auto')}")
     
-    # Note: Model and data loading should be implemented based on your specific needs
-    logger.error("Model and data loading not yet implemented!")
-    logger.error("Please implement model initialization and data loading in this script.")
-    logger.error("")
-    logger.error("Example implementation:")
-    logger.error("  from se_st_combined.models.state_transition import StateTransitionPerturbationModel")
-    logger.error("  from se_st_combined.models.se_st_combined import SE_ST_CombinedModel")
-    logger.error("")
-    logger.error("  # Initialize model based on config")
-    logger.error("  if cfg.model.name == 'se_st_combined':")
-    logger.error("      model = SE_ST_CombinedModel(**cfg.model.kwargs)")
-    logger.error("  else:")
-    logger.error("      model = StateTransitionPerturbationModel(**cfg.model.kwargs)")
-    logger.error("")
-    logger.error("  # Initialize data module")
-    logger.error("  datamodule = YourDataModule(**cfg.data.kwargs)")
-    logger.error("")
-    logger.error("  # Train")
-    logger.error("  trainer.fit(model, datamodule)")
-    logger.error("")
-    logger.error("For now, please use the examples/simple_train.py script for actual training.")
+    # Initialize model based on config
+    logger.info("Initializing model...")
+    model_name = cfg.get('model', {}).get('name', 'se_st_combined')
+    model_kwargs = OmegaConf.to_container(cfg.get('model', {}).get('kwargs', {}), resolve=True)
     
-    return 1
+    if model_name == 'se_st_combined':
+        logger.info("Creating SE_ST_CombinedModel")
+        model = SE_ST_CombinedModel(**model_kwargs)
+    else:
+        logger.info("Creating StateTransitionPerturbationModel")
+        model = StateTransitionPerturbationModel(**model_kwargs)
+    
+    logger.info(f"Model initialized: {model.__class__.__name__}")
+    
+    # Initialize data module
+    logger.info("Initializing data module...")
+    data_kwargs = OmegaConf.to_container(cfg.get('data', {}).get('kwargs', {}), resolve=True)
+    
+    # Add batch_size from training config if not in data kwargs
+    if 'batch_size' not in data_kwargs:
+        data_kwargs['batch_size'] = cfg.training.get('batch_size', 16)
+    
+    datamodule = SE_ST_DataModule(**data_kwargs)
+    logger.info("Data module initialized")
+    
+    # Start training
+    logger.info("Starting training...")
+    logger.info(f"Max steps: {cfg.training.get('max_steps', 40000)}")
+    logger.info(f"Batch size: {data_kwargs.get('batch_size', 16)}")
+    
+    try:
+        trainer.fit(model, datamodule)
+        logger.info("Training completed successfully!")
+        
+        # Save final model
+        final_model_path = full_output_dir / "final_model.ckpt"
+        trainer.save_checkpoint(str(final_model_path))
+        logger.info(f"Final model saved to {final_model_path}")
+        
+        return 0
+        
+    except Exception as e:
+        logger.error(f"Training failed: {e}")
+        logger.exception("Full traceback:")
+        return 1
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="se_st_combined")
