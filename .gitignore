@@ -155,7 +155,7 @@ Thumbs.db
 logs/
 outputs/
 results/
-data/
+/data/
 checkpoints/
 wandb/
 tensorboard_logs/
