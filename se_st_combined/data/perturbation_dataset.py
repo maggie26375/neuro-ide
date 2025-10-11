@@ -231,51 +231,34 @@ class PerturbationDataset(Dataset):
         Set up datasets according to TOML configuration and split.
         """
         for dataset_name, dataset_path in self.config.get("datasets", {}).items():
-            # Get zeroshot configuration
-            zeroshot_config = self.config.get("zeroshot", {})
+            # Check if this dataset should be loaded for current split
+            training_config = self.config.get("training", {})
+            dataset_split = training_config.get(dataset_name, "train")
             
-            # Check if this dataset/celltype is designated for val or test
-            zeroshot_key = f"{dataset_name}.*"
-            is_zeroshot = False
-            zeroshot_split = None
-            
-            # Check for specific celltype zeroshot
-            for key, split_name in zeroshot_config.items():
-                if key.startswith(dataset_name):
-                    is_zeroshot = True
-                    zeroshot_split = split_name
-                    break
-            
-            # Determine if we should load this dataset for current split
-            should_load = False
-            if is_zeroshot:
-                # Zeroshot: load if split matches zeroshot split
-                should_load = (self.split == zeroshot_split)
+            # For now, always load the dataset if it's marked as "train" in training config
+            # We'll handle zeroshot splits at the cell type level inside _load_and_pair_single_h5
+            if dataset_split == "train":
+                logger.info(f"Loading dataset: {dataset_name} for split: {self.split}")
+                
+                # Find H5 files
+                files = self._find_dataset_files(dataset_path)
+                logger.info(f"Found {len(files)} H5 files for {dataset_name}")
+                
+                for h5_file in files:
+                    logger.info(f"Processing {h5_file.name}...")
+                    try:
+                        self._load_and_pair_single_h5(str(h5_file), dataset_name)
+                    except Exception as e:
+                        logger.error(f"Error processing {h5_file}: {e}")
+                        import traceback
+                        traceback.print_exc()
             else:
-                # Normal training: load for train split
-                should_load = (self.split == "train")
-            
-            if not should_load:
-                continue
-            
-            logger.info(f"Loading dataset: {dataset_name} for split: {self.split}")
-            
-            # Find H5 files
-            files = self._find_dataset_files(dataset_path)
-            logger.info(f"Found {len(files)} H5 files for {dataset_name}")
-            
-            for h5_file in files:
-                logger.info(f"Processing {h5_file.name}...")
-                try:
-                    self._load_and_pair_single_h5(str(h5_file))
-                except Exception as e:
-                    logger.error(f"Error processing {h5_file}: {e}")
-                    import traceback
-                    traceback.print_exc()
+                logger.debug(f"Skipping dataset {dataset_name} (configured for split: {dataset_split})")
     
-    def _load_and_pair_single_h5(self, h5_path: str):
+    def _load_and_pair_single_h5(self, h5_path: str, dataset_name: str):
         """
         Load a single H5 file and create control/perturbation pairs.
+        Now also checks zeroshot configuration to filter cells by split.
         """
         # Load metadata
         cache = H5MetadataCache(
@@ -336,6 +319,20 @@ class PerturbationDataset(Dataset):
         
         logger.info(f"Found {len(unique_perts)} unique perturbations (excluding control)")
         
+        # Get zeroshot configuration
+        zeroshot_config = self.config.get("zeroshot", {})
+        
+        # Build a map of cell type to split
+        celltype_splits = {}
+        for key, split_val in zeroshot_config.items():
+            # key format: "dataset_name.celltype"
+            if "." in key:
+                parts = key.split(".", 1)
+                if parts[0] == dataset_name:
+                    celltype_splits[parts[1]] = split_val
+        
+        logger.info(f"Zeroshot cell type splits: {celltype_splits}")
+        
         # Create pairs for each perturbation
         n_pairs_created = 0
         for pert_name in unique_perts:
@@ -348,7 +345,10 @@ class PerturbationDataset(Dataset):
             all_pert_cells = []
             for (p, batch, ct), indices in cells_by_pert_batch.items():
                 if p == pert_name:
-                    all_pert_cells.extend([(idx, batch, ct) for idx in indices])
+                    # Check if this cell type should be included in current split
+                    ct_split = celltype_splits.get(ct, "train")  # default to train
+                    if ct_split == self.split:
+                        all_pert_cells.extend([(idx, batch, ct) for idx in indices])
             
             if len(all_pert_cells) == 0:
                 continue
@@ -362,21 +362,28 @@ class PerturbationDataset(Dataset):
             for sample_idx in sampled_pert_cells:
                 pert_cell_idx, batch_name, cell_type = all_pert_cells[sample_idx]
                 
+                # Check if this cell type should be included in current split
+                ct_split = celltype_splits.get(cell_type, "train")
+                if ct_split != self.split:
+                    continue
+                
                 # Find control cells from the same batch and cell type
                 ctrl_key = (self.control_pert, batch_name, cell_type)
                 if ctrl_key in cells_by_pert_batch:
                     ctrl_cells = cells_by_pert_batch[ctrl_key]
                 else:
-                    # Fallback: any control cells from same cell type
+                    # Fallback: any control cells from same cell type (matching current split)
                     ctrl_cells = []
                     for (p, b, ct), indices in cells_by_pert_batch.items():
-                        if p == self.control_pert and ct == cell_type:
+                        ct_split_check = celltype_splits.get(ct, "train")
+                        if p == self.control_pert and ct == cell_type and ct_split_check == self.split:
                             ctrl_cells.extend(indices)
                 
                 if len(ctrl_cells) == 0:
-                    # Final fallback: any control cells
+                    # Final fallback: any control cells from same split
                     for (p, b, ct), indices in cells_by_pert_batch.items():
-                        if p == self.control_pert:
+                        ct_split_check = celltype_splits.get(ct, "train")
+                        if p == self.control_pert and ct_split_check == self.split:
                             ctrl_cells.extend(indices)
                 
                 if len(ctrl_cells) == 0:
