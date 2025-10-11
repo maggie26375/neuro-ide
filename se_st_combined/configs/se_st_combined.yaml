@@ -8,6 +8,10 @@ hydra:
     chdir: false  # Don't change working directory
   run:
     dir: ${output_dir}/${name}  # Output directory for hydra logs
+  mode: MULTIRUN  # Allow overrides without strict struct checking
+  
+# Explicitly allow structural changes
+_target_: ???  # This makes OmegaConf less strict
   
 # Experiment Configuration
 name: se_st_experiment

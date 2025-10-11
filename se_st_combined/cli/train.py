@@ -81,8 +81,7 @@ def setup_callbacks(cfg: DictConfig):
     return callbacks
 
 
-@hydra.main(version_base=None, config_path="../configs", config_name="se_st_combined")
-def main(cfg: DictConfig):
+def train_main(cfg: DictConfig):
     """
     Main training function with Hydra configuration.
     
@@ -164,6 +163,14 @@ def main(cfg: DictConfig):
     logger.error("For now, please use the examples/simple_train.py script for actual training.")
     
     return 1
+
+
+@hydra.main(version_base=None, config_path="../configs", config_name="se_st_combined")
+def main(cfg: DictConfig):
+    """Hydra entry point that disables struct before calling train_main"""
+    # Must disable struct mode IMMEDIATELY before any config access
+    OmegaConf.set_struct(cfg, False)
+    return train_main(cfg)
 
 
 if __name__ == "__main__":
