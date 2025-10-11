@@ -439,19 +439,39 @@ class PerturbationDataset(Dataset):
             # Read perturbed cells
             pert_indices = spec['pert_indices']
             if len(pert_indices) == self.cell_sentence_len:
-                pert_cells = X[pert_indices, :]
+                # H5py requires sorted indices
+                sampled_pert = np.array(pert_indices)
+                sort_idx = np.argsort(sampled_pert)
+                sampled_pert_sorted = sampled_pert[sort_idx]
+                pert_cells = X[sampled_pert_sorted, :]
+                # Restore original order
+                unsort_idx = np.argsort(sort_idx)
+                pert_cells = pert_cells[unsort_idx]
             else:
                 # Sample with replacement
-                sampled = np.random.choice(pert_indices, size=self.cell_sentence_len, replace=True)
-                pert_cells = X[sampled, :]
+                sampled_pert = np.random.choice(pert_indices, size=self.cell_sentence_len, replace=True)
+                # H5py requires sorted indices
+                sort_idx = np.argsort(sampled_pert)
+                sampled_pert_sorted = sampled_pert[sort_idx]
+                pert_cells = X[sampled_pert_sorted, :]
+                # Restore original order
+                unsort_idx = np.argsort(sort_idx)
+                pert_cells = pert_cells[unsort_idx]
             
             # Read control cells
             ctrl_indices = spec['ctrl_indices']
             if len(ctrl_indices) >= self.cell_sentence_len:
-                sampled = np.random.choice(ctrl_indices, size=self.cell_sentence_len, replace=False)
+                sampled_ctrl = np.random.choice(ctrl_indices, size=self.cell_sentence_len, replace=False)
             else:
-                sampled = np.random.choice(ctrl_indices, size=self.cell_sentence_len, replace=True)
-            ctrl_cells = X[sampled, :]
+                sampled_ctrl = np.random.choice(ctrl_indices, size=self.cell_sentence_len, replace=True)
+            
+            # H5py requires sorted indices
+            sort_idx = np.argsort(sampled_ctrl)
+            sampled_ctrl_sorted = sampled_ctrl[sort_idx]
+            ctrl_cells = X[sampled_ctrl_sorted, :]
+            # Restore original order
+            unsort_idx = np.argsort(sort_idx)
+            ctrl_cells = ctrl_cells[unsort_idx]
             
             # Convert to dense if needed
             if hasattr(pert_cells, 'toarray'):
@@ -491,7 +511,7 @@ def collate_perturbation_batch(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     collated = {
         'ctrl_cell_emb': torch.stack([item['ctrl_cell_emb'] for item in batch]),
         'pert_cell_emb': torch.stack([item['pert_cell_emb'] for item in batch]),
-        'pert_emb': torch.stack([item['pert_embedding'] for item in batch]),
+        'pert_emb': torch.stack([item['pert_emb'] for item in batch]),  # Fixed: pert_emb not pert_embedding
         'perturbation': [item['perturbation'] for item in batch],
         'cell_type': [item['cell_type'] for item in batch],
         'batch': [item['batch'] for item in batch],
