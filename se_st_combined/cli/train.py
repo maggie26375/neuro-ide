@@ -96,6 +96,9 @@ def main(cfg: DictConfig):
         # Use different config file
         se-st-train --config-name custom_config
     """
+    # Disable struct mode to allow flexible configuration
+    OmegaConf.set_struct(cfg, False)
+    
     logger.info("=" * 60)
     logger.info("SE+ST Combined Model Training with Hydra")
     logger.info("=" * 60)
