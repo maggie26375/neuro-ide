@@ -150,6 +150,10 @@ class SE_ST_CombinedModel(PerturbationModel):
             'n_decoder_layers': 4,
             'dropout': 0.1,
             'lr': 1e-4,
+            'embed_key': None,  # We're working in embedding space, not gene space
+            'output_space': 'gene',  # Output space
+            'gene_dim': self.output_dim,  # Gene dimension
+            'batch_dim': None,  # Batch dimension (optional)
             'transformer_backbone_kwargs': {
                 'hidden_size': self.st_hidden_dim,
                 'intermediate_size': self.st_hidden_dim * 4,
