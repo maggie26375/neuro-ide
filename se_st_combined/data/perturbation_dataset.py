@@ -352,10 +352,8 @@ class PerturbationDataset(Dataset):
             if len(all_pert_cells) == 0:
                 continue
             
-            # Check if we have enough cells to form a sentence
-            if len(all_pert_cells) < self.cell_sentence_len:
-                logger.debug(f"Not enough perturbed cells for '{pert_name}': {len(all_pert_cells)} < {self.cell_sentence_len}")
-                continue
+            # Note: We can still create sentences even with fewer cells by sampling with replacement
+            # This matches STATE's behavior
             
             # Group perturbed cells by (batch, cell_type) to find matching controls
             pert_cells_by_context = {}
@@ -376,16 +374,20 @@ class PerturbationDataset(Dataset):
                 ctrl_key = (self.control_pert, batch_name, cell_type)
                 ctrl_cells = cells_by_pert_batch.get(ctrl_key, [])
                 
-                # Need enough cells for a sentence
-                if len(pert_indices) < self.cell_sentence_len or len(ctrl_cells) < self.cell_sentence_len:
+                # Need at least 1 cell for both pert and ctrl
+                if len(pert_indices) == 0 or len(ctrl_cells) == 0:
                     continue
                 
                 # Sample cell_sentence_len cells for both pert and ctrl
+                # Use replacement if not enough cells (matching STATE's behavior)
+                replace_pert = len(pert_indices) < self.cell_sentence_len
+                replace_ctrl = len(ctrl_cells) < self.cell_sentence_len
+                
                 sampled_pert_indices = self.rng.choice(
-                    pert_indices, size=self.cell_sentence_len, replace=False
+                    pert_indices, size=self.cell_sentence_len, replace=replace_pert
                 )
                 sampled_ctrl_indices = self.rng.choice(
-                    ctrl_cells, size=self.cell_sentence_len, replace=False
+                    ctrl_cells, size=self.cell_sentence_len, replace=replace_ctrl
                 )
                 
                 # Create ONE sentence sample with all cells
