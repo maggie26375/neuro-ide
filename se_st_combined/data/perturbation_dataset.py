@@ -69,7 +69,18 @@ class AnnDataH5Reader:
     def read_expression_matrix(self) -> np.ndarray:
         """Read expression matrix X."""
         if 'X' in self.h5_file:
-            return np.array(self.h5_file['X'])
+            X = self.h5_file['X']
+            # Check if it's a sparse matrix
+            attrs = dict(X.attrs) if hasattr(X, 'attrs') else {}
+            if attrs.get('encoding-type') == 'csr_matrix':
+                # Handle CSR sparse matrix
+                raise NotImplementedError("CSR sparse matrix not yet supported. Use obsm/X_hvg instead.")
+            else:
+                # Dense matrix
+                X_array = np.array(X)
+                if X_array.ndim != 2:
+                    raise ValueError(f"Expected 2D matrix, got shape {X_array.shape}")
+                return X_array
         else:
             raise KeyError("No expression matrix 'X' found in H5 file")
     
@@ -280,10 +291,19 @@ class PerturbationDataset(Dataset):
                 
                 # Create pairs for each perturbation
                 for pert in perturbations:
+                    # Decode bytes to string if needed
+                    pert_str = pert.decode('utf-8') if isinstance(pert, bytes) else str(pert)
+                    
                     # Skip if no embedding available
-                    if pert not in self.pert_embeddings:
-                        logger.warning(f"No embedding found for {pert}, skipping")
-                        continue
+                    if pert_str not in self.pert_embeddings:
+                        # Try some common variations
+                        if pert_str.upper() not in self.pert_embeddings and pert_str.lower() not in self.pert_embeddings:
+                            logger.warning(f"No embedding found for {pert_str}, skipping")
+                            continue
+                        elif pert_str.upper() in self.pert_embeddings:
+                            pert_str = pert_str.upper()
+                        else:
+                            pert_str = pert_str.lower()
                     
                     # Find all batches that have this perturbation
                     pert_batches = [batch for (p, batch) in cell_indices_by_pert_batch.keys() if p == pert]
@@ -328,8 +348,8 @@ class PerturbationDataset(Dataset):
                         pair = {
                             'ctrl_cell_emb': torch.tensor(X[sampled_ctrl_indices], dtype=torch.float32),
                             'pert_cell_emb': torch.tensor(X[sampled_pert_indices], dtype=torch.float32),
-                            'pert_embedding': self.pert_embeddings[pert],
-                            'perturbation': pert,
+                            'pert_embedding': self.pert_embeddings[pert_str],
+                            'perturbation': pert_str,
                             'cell_type': cell_type,
                             'batch': batch,
                         }
