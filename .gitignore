@@ -165,3 +165,4 @@ tensorboard_logs/
 *.temp
 temp/
 tmp/
+state/
