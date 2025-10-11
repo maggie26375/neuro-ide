@@ -88,15 +88,15 @@ class SE_ST_CombinedModel(PerturbationModel):
         # Initialize SE model
         self._load_se_model()
         
-        # Initialize ST model
+        # State embedding dimension (from SE model) - must be set before building ST model
+        self.state_dim = self.se_model.output_dim if hasattr(self.se_model, 'output_dim') else 512
+        
+        # Initialize ST model (uses state_dim)
         self._build_st_model(
             predict_residual=predict_residual,
             distributional_loss=distributional_loss,
             transformer_backbone_key=transformer_backbone_key,
         )
-        
-        # State embedding dimension (from SE model)
-        self.state_dim = self.se_model.output_dim if hasattr(self.se_model, 'output_dim') else 512
         
         logger.info(f"SE+ST Combined Model initialized:")
         logger.info(f"  - SE model: {se_model_path}")
