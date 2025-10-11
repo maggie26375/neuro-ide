@@ -432,52 +432,44 @@ class PerturbationDataset(Dataset):
         """Dynamically create sentence by reading H5 on-demand."""
         spec = self.sentence_specs[idx]
         
+        # Helper function to read cells with H5py's strict indexing requirements
+        def read_cells_from_h5(X, indices, n_samples):
+            """
+            Read cells from H5 dataset. H5py requires:
+            1. Indices must be sorted
+            2. No duplicate indices
+            
+            So we read unique indices, then replicate as needed.
+            """
+            # Sample (with replacement if needed)
+            replace = len(indices) < n_samples
+            sampled = np.random.choice(indices, size=n_samples, replace=replace)
+            
+            # Get unique indices and their positions
+            unique_indices, inverse_indices = np.unique(sampled, return_inverse=True)
+            
+            # Read unique cells (H5py is happy with sorted unique indices)
+            unique_cells = X[unique_indices.tolist(), :]
+            
+            # Convert to numpy if needed
+            if hasattr(unique_cells, 'toarray'):
+                unique_cells = unique_cells.toarray()
+            else:
+                unique_cells = np.array(unique_cells)
+            
+            # Replicate cells according to original sampling
+            cells = unique_cells[inverse_indices]
+            return cells
+        
         # Open H5 file and read only the required cells
         with h5py.File(spec['h5_path'], 'r') as h5_file:
             X = h5_file[spec['data_key']]
             
             # Read perturbed cells
-            pert_indices = spec['pert_indices']
-            if len(pert_indices) == self.cell_sentence_len:
-                # H5py requires sorted indices
-                sampled_pert = np.array(pert_indices)
-                sort_idx = np.argsort(sampled_pert)
-                sampled_pert_sorted = sampled_pert[sort_idx]
-                pert_cells = X[sampled_pert_sorted, :]
-                # Restore original order
-                unsort_idx = np.argsort(sort_idx)
-                pert_cells = pert_cells[unsort_idx]
-            else:
-                # Sample with replacement
-                sampled_pert = np.random.choice(pert_indices, size=self.cell_sentence_len, replace=True)
-                # H5py requires sorted indices
-                sort_idx = np.argsort(sampled_pert)
-                sampled_pert_sorted = sampled_pert[sort_idx]
-                pert_cells = X[sampled_pert_sorted, :]
-                # Restore original order
-                unsort_idx = np.argsort(sort_idx)
-                pert_cells = pert_cells[unsort_idx]
+            pert_cells = read_cells_from_h5(X, spec['pert_indices'], self.cell_sentence_len)
             
             # Read control cells
-            ctrl_indices = spec['ctrl_indices']
-            if len(ctrl_indices) >= self.cell_sentence_len:
-                sampled_ctrl = np.random.choice(ctrl_indices, size=self.cell_sentence_len, replace=False)
-            else:
-                sampled_ctrl = np.random.choice(ctrl_indices, size=self.cell_sentence_len, replace=True)
-            
-            # H5py requires sorted indices
-            sort_idx = np.argsort(sampled_ctrl)
-            sampled_ctrl_sorted = sampled_ctrl[sort_idx]
-            ctrl_cells = X[sampled_ctrl_sorted, :]
-            # Restore original order
-            unsort_idx = np.argsort(sort_idx)
-            ctrl_cells = ctrl_cells[unsort_idx]
-            
-            # Convert to dense if needed
-            if hasattr(pert_cells, 'toarray'):
-                pert_cells = pert_cells.toarray()
-            if hasattr(ctrl_cells, 'toarray'):
-                ctrl_cells = ctrl_cells.toarray()
+            ctrl_cells = read_cells_from_h5(X, spec['ctrl_indices'], self.cell_sentence_len)
         
         return {
             'ctrl_cell_emb': torch.from_numpy(ctrl_cells).float(),  # [cell_sentence_len, gene_dim]
