@@ -36,7 +36,7 @@ def safe_decode_array(arr) -> np.ndarray:
             decoded.append(x.decode("utf-8", errors="ignore"))
         else:
             decoded.append(str(x))
-    return np.ndarray(decoded, dtype=str)
+    return np.array(decoded, dtype=str)
 
 
 class H5MetadataCache:
