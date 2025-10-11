@@ -155,10 +155,18 @@ Thumbs.db
 logs/
 outputs/
 results/
-/data/
 checkpoints/
 wandb/
 tensorboard_logs/
+
+# Data directory - ignore data files but allow config files
+/data/*.h5
+/data/*.h5ad
+/data/*.pt
+/data/*.pkl
+/data/*.pickle
+/data/*.ckpt
+/data/*.pth
 
 # Temporary files
 *.tmp
