@@ -12,7 +12,6 @@ from typing import Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
-from omegaconf import DictConfig
 
 from .base import PerturbationModel
 from .state_transition import StateTransitionPerturbationModel

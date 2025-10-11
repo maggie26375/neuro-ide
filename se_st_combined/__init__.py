@@ -19,8 +19,13 @@ __version__ = "0.1.0"
 __author__ = "maggie26375"
 __email__ = "your-email@example.com"
 
-from .models.se_st_combined import SE_ST_CombinedModel
+# Use lazy imports to avoid loading all dependencies at import time
+# Users can import specific modules as needed:
+#   from se_st_combined.models.se_st_combined import SE_ST_CombinedModel
+#   from se_st_combined.models.state_transition import StateTransitionPerturbationModel
+#   from se_st_combined.models.decoders import FinetuneVCICountsDecoder
+#   from se_st_combined.models.decoders_nb import NBDecoder
 
 __all__ = [
-    "SE_ST_CombinedModel",
+    "__version__",
 ]

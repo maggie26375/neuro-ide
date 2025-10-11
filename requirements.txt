@@ -34,9 +34,15 @@ tqdm>=4.62.0
 click>=8.0.0
 pyyaml>=6.0
 
-# Optional: For better performance
-# accelerate>=0.20.0
-# transformers>=4.20.0
+# Geometric loss for optimal transport
+geomloss>=0.2.4
+
+# Transformers for model backbones
+transformers>=4.20.0
+accelerate>=0.20.0
+
+# Additional dependencies
+peft>=0.3.0  # For LoRA support
 
 # Development dependencies (optional)
 # pytest>=6.0.0
