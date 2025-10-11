@@ -114,10 +114,10 @@ class PerturbationDataset(Dataset):
         pert_col: str = "target_gene",
         cell_type_key: str = "cell_type",
         control_pert: str = "non-targeting",
-        n_ctrl_samples: int = 5,
-        n_pert_samples: int = 5,
+        cell_sentence_len: int = 128,  # Number of cells per sentence (STATE default)
         random_seed: int = 42,
         embed_key: str = None,  # Not used for now, but kept for compatibility
+        **kwargs,  # For backward compatibility (n_ctrl_samples, n_pert_samples)
     ):
         """
         Initialize a perturbation dataset.
@@ -130,10 +130,10 @@ class PerturbationDataset(Dataset):
             pert_col: H5 obs column for perturbations
             cell_type_key: H5 obs column for cell types
             control_pert: Perturbation treated as control
-            n_ctrl_samples: Number of control cells to sample per perturbation
-            n_pert_samples: Number of perturbed cells to sample per pair
+            cell_sentence_len: Number of cells per sentence (STATE default: 128)
             random_seed: Random seed for reproducibility
             embed_key: Key under obsm for embeddings (not used yet)
+            **kwargs: Backward compatibility (n_ctrl_samples, n_pert_samples ignored)
         """
         super().__init__()
         self.toml_config_path = Path(toml_config_path)
@@ -143,8 +143,7 @@ class PerturbationDataset(Dataset):
         self.pert_col = pert_col
         self.cell_type_key = cell_type_key
         self.control_pert = control_pert
-        self.n_ctrl_samples = n_ctrl_samples
-        self.n_pert_samples = n_pert_samples
+        self.cell_sentence_len = cell_sentence_len
         self.embed_key = embed_key
         self.rng = np.random.default_rng(random_seed)
         
@@ -353,59 +352,69 @@ class PerturbationDataset(Dataset):
             if len(all_pert_cells) == 0:
                 continue
             
-            # Sample perturbed cells
-            n_to_sample = min(self.n_pert_samples, len(all_pert_cells))
-            sampled_pert_cells = self.rng.choice(
-                len(all_pert_cells), size=n_to_sample, replace=False
-            )
+            # Check if we have enough cells to form a sentence
+            if len(all_pert_cells) < self.cell_sentence_len:
+                logger.debug(f"Not enough perturbed cells for '{pert_name}': {len(all_pert_cells)} < {self.cell_sentence_len}")
+                continue
             
-            for sample_idx in sampled_pert_cells:
-                pert_cell_idx, batch_name, cell_type = all_pert_cells[sample_idx]
-                
-                # Check if this cell type should be included in current split
+            # Group perturbed cells by (batch, cell_type) to find matching controls
+            pert_cells_by_context = {}
+            for idx, batch, ct in all_pert_cells:
+                key = (batch, ct)
+                if key not in pert_cells_by_context:
+                    pert_cells_by_context[key] = []
+                pert_cells_by_context[key].append(idx)
+            
+            # Try to create a sentence from cells with the same batch/cell type
+            for (batch_name, cell_type), pert_indices in pert_cells_by_context.items():
+                # Check split
                 ct_split = celltype_splits.get(cell_type, "train")
                 if ct_split != self.split:
                     continue
                 
-                # Find control cells from the same batch and cell type
+                # Find corresponding control cells
                 ctrl_key = (self.control_pert, batch_name, cell_type)
-                if ctrl_key in cells_by_pert_batch:
-                    ctrl_cells = cells_by_pert_batch[ctrl_key]
-                else:
-                    # Fallback: any control cells from same cell type (matching current split)
-                    ctrl_cells = []
-                    for (p, b, ct), indices in cells_by_pert_batch.items():
-                        ct_split_check = celltype_splits.get(ct, "train")
-                        if p == self.control_pert and ct == cell_type and ct_split_check == self.split:
-                            ctrl_cells.extend(indices)
+                ctrl_cells = cells_by_pert_batch.get(ctrl_key, [])
                 
-                if len(ctrl_cells) == 0:
-                    # Final fallback: any control cells from same split
-                    for (p, b, ct), indices in cells_by_pert_batch.items():
-                        ct_split_check = celltype_splits.get(ct, "train")
-                        if p == self.control_pert and ct_split_check == self.split:
-                            ctrl_cells.extend(indices)
-                
-                if len(ctrl_cells) == 0:
-                    logger.warning(f"No control cells found for perturbation '{pert_name}'")
+                # Need enough cells for a sentence
+                if len(pert_indices) < self.cell_sentence_len or len(ctrl_cells) < self.cell_sentence_len:
                     continue
                 
-                # Sample control cells
-                n_ctrl = min(self.n_ctrl_samples, len(ctrl_cells))
-                sampled_ctrl_indices = self.rng.choice(ctrl_cells, size=n_ctrl, replace=False)
+                # Sample cell_sentence_len cells for both pert and ctrl
+                sampled_pert_indices = self.rng.choice(
+                    pert_indices, size=self.cell_sentence_len, replace=False
+                )
+                sampled_ctrl_indices = self.rng.choice(
+                    ctrl_cells, size=self.cell_sentence_len, replace=False
+                )
                 
-                # Create a pair for each control cell
-                for ctrl_idx in sampled_ctrl_indices:
-                    pair = {
-                        'ctrl_cell_emb': torch.tensor(X[ctrl_idx], dtype=torch.float32),
-                        'pert_cell_emb': torch.tensor(X[pert_cell_idx], dtype=torch.float32),
-                        'pert_embedding': pert_emb,
-                        'perturbation': pert_name,
-                        'cell_type': cell_type,
-                        'batch': batch_name,
-                    }
-                    self.pairs.append(pair)
-                    n_pairs_created += 1
+                # Create ONE sentence sample with all cells
+                ctrl_cell_embeddings = torch.tensor(
+                    X[sampled_ctrl_indices], dtype=torch.float32
+                )  # Shape: [cell_sentence_len, gene_dim]
+                
+                pert_cell_embeddings = torch.tensor(
+                    X[sampled_pert_indices], dtype=torch.float32
+                )  # Shape: [cell_sentence_len, gene_dim]
+                
+                # Repeat perturbation embedding for each cell in the sentence
+                pert_embeddings = pert_emb.unsqueeze(0).repeat(self.cell_sentence_len, 1)
+                # Shape: [cell_sentence_len, pert_dim]
+                
+                sentence = {
+                    'ctrl_cell_emb': ctrl_cell_embeddings,
+                    'pert_cell_emb': pert_cell_embeddings,
+                    'pert_embedding': pert_embeddings,
+                    'perturbation': pert_name,
+                    'cell_type': cell_type,
+                    'batch': batch_name,
+                }
+                self.pairs.append(sentence)
+                n_pairs_created += 1
+                
+                # Create multiple sentences if we have enough cells
+                # (can create more sentences from the same perturbation/context)
+                break  # For now, create one sentence per context
         
         logger.info(f"Created {n_pairs_created} pairs from {Path(h5_path).name}")
     
@@ -444,10 +453,13 @@ class PerturbationDataset(Dataset):
 
 def collate_perturbation_batch(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     """
-    Collate function for perturbation batches.
+    Collate function for perturbation batches with cell sentences.
+    
+    Each item in batch already contains [cell_sentence_len, dim] tensors.
+    We just need to stack them into [batch_size, cell_sentence_len, dim].
     
     Args:
-        batch: List of pair dictionaries from PerturbationDataset
+        batch: List of sentence dictionaries from PerturbationDataset
         
     Returns:
         Batched dictionary with stacked tensors
@@ -455,8 +467,9 @@ def collate_perturbation_batch(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     if len(batch) == 0:
         return {}
     
-    # Stack all tensors
-    # Note: Use 'pert_emb' to match what StateTransitionPerturbationModel expects
+    # Stack all sentence tensors
+    # Each item['ctrl_cell_emb'] has shape [cell_sentence_len, gene_dim]
+    # After stacking: [batch_size, cell_sentence_len, gene_dim]
     collated = {
         'ctrl_cell_emb': torch.stack([item['ctrl_cell_emb'] for item in batch]),
         'pert_cell_emb': torch.stack([item['pert_cell_emb'] for item in batch]),
