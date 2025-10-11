@@ -268,31 +268,26 @@ class PerturbationDataset(Dataset):
             batch_col=self.batch_col,
         )
         
-        # Open H5 file to read expression data
+        # Determine which data to use and get shape (but DON'T load full matrix yet!)
         with h5py.File(h5_path, "r") as f:
-            # Read expression matrix - try obsm/X_hvg first, fallback to X
             if self.embed_key and f"obsm/{self.embed_key}" in f:
-                X = np.array(f[f"obsm/{self.embed_key}"])
-                logger.info(f"Using obsm/{self.embed_key} with shape {X.shape}")
+                data_key = f"obsm/{self.embed_key}"
+                n_cells, n_genes = f[data_key].shape
+                logger.info(f"Will use {data_key} with shape ({n_cells}, {n_genes})")
             elif "obsm/X_hvg" in f:
-                X = np.array(f["obsm/X_hvg"])
-                logger.info(f"Using obsm/X_hvg with shape {X.shape}")
+                data_key = "obsm/X_hvg"
+                n_cells, n_genes = f[data_key].shape
+                logger.info(f"Will use {data_key} with shape ({n_cells}, {n_genes})")
             else:
                 X_ds = f["X"]
                 attrs = dict(X_ds.attrs) if hasattr(X_ds, 'attrs') else {}
                 if attrs.get('encoding-type') == 'csr_matrix':
-                    logger.warning("CSR sparse matrix detected - reading may be slow")
-                    # For now, let's skip CSR and require dense
-                    raise NotImplementedError(
-                        "CSR sparse matrix not supported. Please use obsm/X_hvg or convert X to dense."
-                    )
-                X = np.array(X_ds)
-                logger.info(f"Using X with shape {X.shape}")
-            
-            if X.ndim != 2:
-                raise ValueError(f"Expected 2D expression matrix, got shape {X.shape}")
+                    logger.warning(f"Skipping {Path(h5_path).name}: CSR sparse matrix not supported")
+                    return  # Skip this file
+                data_key = "X"
+                n_cells, n_genes = X_ds.shape
+                logger.info(f"Will use X with shape ({n_cells}, {n_genes})")
         
-        n_cells = X.shape[0]
         logger.info(f"Processing {n_cells} cells from {Path(h5_path).name}")
         
         # Organize cells by (perturbation, batch)
@@ -390,14 +385,15 @@ class PerturbationDataset(Dataset):
                     ctrl_cells, size=self.cell_sentence_len, replace=replace_ctrl
                 )
                 
-                # Create ONE sentence sample with all cells
-                ctrl_cell_embeddings = torch.tensor(
-                    X[sampled_ctrl_indices], dtype=torch.float32
-                )  # Shape: [cell_sentence_len, gene_dim]
-                
-                pert_cell_embeddings = torch.tensor(
-                    X[sampled_pert_indices], dtype=torch.float32
-                )  # Shape: [cell_sentence_len, gene_dim]
+                # Read only the sampled cells from H5 (memory efficient!)
+                with h5py.File(h5_path, "r") as f:
+                    ctrl_cell_embeddings = torch.tensor(
+                        f[data_key][sampled_ctrl_indices], dtype=torch.float32
+                    )  # Shape: [cell_sentence_len, gene_dim]
+                    
+                    pert_cell_embeddings = torch.tensor(
+                        f[data_key][sampled_pert_indices], dtype=torch.float32
+                    )  # Shape: [cell_sentence_len, gene_dim]
                 
                 # Repeat perturbation embedding for each cell in the sentence
                 pert_embeddings = pert_emb.unsqueeze(0).repeat(self.cell_sentence_len, 1)
@@ -431,12 +427,15 @@ class PerturbationDataset(Dataset):
                         ctrl_cells, size=self.cell_sentence_len, replace=replace_ctrl
                     )
                     
-                    ctrl_cell_embeddings = torch.tensor(
-                        X[sampled_ctrl_indices], dtype=torch.float32
-                    )
-                    pert_cell_embeddings = torch.tensor(
-                        X[sampled_pert_indices], dtype=torch.float32
-                    )
+                    # Read only the sampled cells from H5 (memory efficient!)
+                    with h5py.File(h5_path, "r") as f:
+                        ctrl_cell_embeddings = torch.tensor(
+                            f[data_key][sampled_ctrl_indices], dtype=torch.float32
+                        )
+                        pert_cell_embeddings = torch.tensor(
+                            f[data_key][sampled_pert_indices], dtype=torch.float32
+                        )
+                    
                     pert_embeddings = pert_emb.unsqueeze(0).repeat(self.cell_sentence_len, 1)
                     
                     sentence = {
