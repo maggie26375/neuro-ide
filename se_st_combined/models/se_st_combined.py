@@ -150,6 +150,24 @@ class SE_ST_CombinedModel(PerturbationModel):
             'n_decoder_layers': 4,
             'dropout': 0.1,
             'lr': 1e-4,
+            'transformer_backbone_kwargs': {
+                'hidden_size': self.st_hidden_dim,
+                'intermediate_size': self.st_hidden_dim * 4,
+                'num_hidden_layers': 4,
+                'num_attention_heads': 8,
+                'num_key_value_heads': 8,
+                'head_dim': self.st_hidden_dim // 8,
+                'use_cache': False,
+                'attention_dropout': 0.0,
+                'hidden_dropout': 0.0,
+                'layer_norm_eps': 1e-6,
+                'pad_token_id': 0,
+                'bos_token_id': 1,
+                'eos_token_id': 2,
+                'tie_word_embeddings': False,
+                'rotary_dim': 0,
+                'use_rotary_embeddings': False,
+            }
         }
         
         # Initialize ST model
