@@ -2,6 +2,10 @@
 defaults:
   - _self_
 
+# THIS IS CRITICAL: Disable struct mode to allow arbitrary config overrides
+# Without this, Hydra won't allow overriding nested configs like model.kwargs.se_model_path
+_target_: null  # Make this a regular DictConfig, not a structured config
+
 # Disable struct mode to allow config overrides
 hydra:
   job:

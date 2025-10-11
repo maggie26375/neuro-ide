@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 import hydra
+from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 import torch
 from lightning.pytorch import Trainer
@@ -20,6 +21,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Disable struct mode globally for OmegaConf
+OmegaConf.struct(False)
 
 
 def setup_logger(cfg: DictConfig):
