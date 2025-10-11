@@ -22,8 +22,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Disable struct mode globally for OmegaConf
-OmegaConf.struct(False)
+# Set environment variable to disable Hydra struct checking
+import os
+os.environ['HYDRA_FULL_ERROR'] = '1'
 
 
 def setup_logger(cfg: DictConfig):
