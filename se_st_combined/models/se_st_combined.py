@@ -128,6 +128,12 @@ class SE_ST_CombinedModel(PerturbationModel):
             logger.error(f"Failed to load SE model: {e}")
             raise
     
+    def _build_networks(self):
+        """Build networks - required by PerturbationModel base class."""
+        # This method is required by the abstract base class but the actual
+        # network building is done by the ST model
+        pass
+    
     def _build_st_model(self, predict_residual: bool, distributional_loss: str, transformer_backbone_key: str):
         """Build ST model for state embedding space."""
         # ST model configuration
