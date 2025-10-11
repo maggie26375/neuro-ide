@@ -415,8 +415,40 @@ class PerturbationDataset(Dataset):
                 n_pairs_created += 1
                 
                 # Create multiple sentences if we have enough cells
-                # (can create more sentences from the same perturbation/context)
-                break  # For now, create one sentence per context
+                # Each perturbation/context can create multiple non-overlapping sentences
+                # Calculate how many additional sentences we can create
+                remaining_pert = len(pert_indices) - self.cell_sentence_len
+                remaining_ctrl = len(ctrl_cells) - self.cell_sentence_len
+                
+                # Create additional sentences (up to 10 per perturbation/context to avoid explosion)
+                max_additional = min(10, remaining_pert // self.cell_sentence_len, remaining_ctrl // self.cell_sentence_len)
+                for _ in range(max_additional):
+                    # Sample different cells
+                    sampled_pert_indices = self.rng.choice(
+                        pert_indices, size=self.cell_sentence_len, replace=replace_pert
+                    )
+                    sampled_ctrl_indices = self.rng.choice(
+                        ctrl_cells, size=self.cell_sentence_len, replace=replace_ctrl
+                    )
+                    
+                    ctrl_cell_embeddings = torch.tensor(
+                        X[sampled_ctrl_indices], dtype=torch.float32
+                    )
+                    pert_cell_embeddings = torch.tensor(
+                        X[sampled_pert_indices], dtype=torch.float32
+                    )
+                    pert_embeddings = pert_emb.unsqueeze(0).repeat(self.cell_sentence_len, 1)
+                    
+                    sentence = {
+                        'ctrl_cell_emb': ctrl_cell_embeddings,
+                        'pert_cell_emb': pert_cell_embeddings,
+                        'pert_embedding': pert_embeddings,
+                        'perturbation': pert_name,
+                        'cell_type': cell_type,
+                        'batch': batch_name,
+                    }
+                    self.pairs.append(sentence)
+                    n_pairs_created += 1
         
         logger.info(f"Created {n_pairs_created} pairs from {Path(h5_path).name}")
     
