@@ -456,10 +456,11 @@ def collate_perturbation_batch(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         return {}
     
     # Stack all tensors
+    # Note: Use 'pert_emb' to match what StateTransitionPerturbationModel expects
     collated = {
         'ctrl_cell_emb': torch.stack([item['ctrl_cell_emb'] for item in batch]),
         'pert_cell_emb': torch.stack([item['pert_cell_emb'] for item in batch]),
-        'pert_embedding': torch.stack([item['pert_embedding'] for item in batch]),
+        'pert_emb': torch.stack([item['pert_embedding'] for item in batch]),
         'perturbation': [item['perturbation'] for item in batch],
         'cell_type': [item['cell_type'] for item in batch],
         'batch': [item['batch'] for item in batch],
