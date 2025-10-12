@@ -163,11 +163,14 @@ def run_inference(
                 
                 # Run inference
                 try:
-                    pred = model(
-                        ctrl_cell_emb=batch_X_tensor,
-                        pert_cell_emb=batch_X_tensor,  # Use same as control
-                        pert_emb=batch_pert_emb,
-                    )
+                    # Model expects a batch dictionary
+                    batch_dict = {
+                        'ctrl_cell_emb': batch_X_tensor,
+                        'pert_cell_emb': batch_X_tensor,  # Use same as control
+                        'pert_emb': batch_pert_emb,
+                    }
+                    
+                    pred = model(batch_dict)
                     
                     # Store predictions
                     pred_np = pred.cpu().numpy()
@@ -176,7 +179,7 @@ def run_inference(
                 except Exception as e:
                     logger.error(f"Error processing batch for {pert_name_str}: {e}")
                     # Use input as fallback
-                    predictions[pert_indices[i:end_idx]] = batch_X[i:end_idx]
+                    predictions[pert_indices[i:end_idx]] = batch_X
     
     # Create output AnnData
     output_adata = anndata.AnnData(
