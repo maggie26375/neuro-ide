@@ -221,9 +221,14 @@ def run_inference(
                     # Model expects a batch dictionary
                     batch_dict = {
                         'ctrl_cell_emb': batch_X_tensor,
-                        'pert_cell_emb': batch_X_tensor,  # Use same as control
                         'pert_emb': batch_pert_emb,
                     }
+                    
+                    # Debug: Log shapes on first batch
+                    if i == 0 and pert_name == unique_perts[0]:
+                        logger.info(f"Debug shapes - curr_batch_size: {curr_batch_size}, cell_sentence_len: {cell_sentence_len}")
+                        logger.info(f"  ctrl_cell_emb: {batch_dict['ctrl_cell_emb'].shape}")
+                        logger.info(f"  pert_emb: {batch_dict['pert_emb'].shape}")
                     
                     pred = model(batch_dict)
                     
