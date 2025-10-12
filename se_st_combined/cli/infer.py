@@ -108,8 +108,8 @@ def run_inference(
     unique_perts = adata.obs[pert_col].unique()
     logger.info(f"Found {len(unique_perts)} unique perturbations")
     
-    # Prepare predictions storage
-    predictions = np.zeros((adata.n_obs, adata.n_vars), dtype=np.float32)
+    # Prepare predictions storage (use float16 to save space)
+    predictions = np.zeros((adata.n_obs, adata.n_vars), dtype=np.float16)
     
     # Group cells by perturbation for efficient batch processing
     with torch.no_grad():
@@ -158,8 +158,12 @@ def run_inference(
                 # Shape: [batch_size, cell_sentence_len=128, gene_dim]
                 batch_X_tensor = batch_X_tensor.unsqueeze(1).repeat(1, 128, 1)
                 
-                # Repeat perturbation embedding for batch
-                batch_pert_emb = pert_emb.unsqueeze(0).repeat(end_idx - i, 1)
+                # Flatten to [batch_size*128, gene_dim] as model expects
+                batch_size = batch_X_tensor.shape[0]
+                batch_X_tensor = batch_X_tensor.reshape(-1, batch_X_tensor.shape[2])
+                
+                # Repeat perturbation embedding for each cell in sentence
+                batch_pert_emb = pert_emb.unsqueeze(0).repeat(batch_size * 128, 1)
                 
                 # Run inference
                 try:
@@ -172,10 +176,10 @@ def run_inference(
                     
                     pred = model(batch_dict)
                     
-                    # Predictions are [batch_size, cell_sentence_len=128, gene_dim]
-                    # Average over cell_sentence_len to get per-cell prediction
-                    if pred.dim() == 3:
-                        pred = pred.mean(dim=1)  # [batch_size, gene_dim]
+                    # Predictions are [batch_size*128, gene_dim]
+                    # Reshape to [batch_size, 128, gene_dim] and average
+                    pred = pred.reshape(batch_size, 128, -1)
+                    pred = pred.mean(dim=1)  # Average over cell_sentence_len → [batch_size, gene_dim]
                     
                     # Store predictions
                     pred_np = pred.cpu().numpy()
@@ -294,10 +298,15 @@ def main():
         device=args.device,
     )
     
-    # Save predictions
+    # Save predictions with compression
     logger.info(f"Saving predictions to {output_path}")
-    output_adata.write_h5ad(output_path)
+    output_adata.write_h5ad(output_path, compression="gzip", compression_opts=9)
     logger.info("✅ Inference completed successfully!")
+    
+    # Show file size
+    import os
+    file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+    logger.info(f"Output file size: {file_size_mb:.2f} MB")
 
 
 if __name__ == "__main__":
