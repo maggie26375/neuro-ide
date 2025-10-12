@@ -327,7 +327,10 @@ def run_inference(
     from scipy.sparse import csr_matrix
     
     logger.info(f"Converting predictions to sparse matrix...")
-    predictions_sparse = csr_matrix(predictions)
+    # scipy.sparse doesn't support float16, convert to float32
+    logger.info(f"   Converting from float16 to float32 (scipy requirement)...")
+    predictions_float32 = predictions.astype(np.float32)
+    predictions_sparse = csr_matrix(predictions_float32)
     
     output_adata = anndata.AnnData(
         X=predictions_sparse,
