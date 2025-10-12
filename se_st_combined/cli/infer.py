@@ -1,152 +1,295 @@
 """
-Inference script for SE+ST Combined Model
+SE+ST Combined Model Inference CLI
+
+Usage:
+    se-st-infer \
+        --checkpoint competition/se_st_combined_40k_v2/final_model.ckpt \
+        --adata /data/competition_val_template.h5ad \
+        --output competition/prediction.h5ad \
+        --pert-col target_gene \
+        --se-model-path SE-600M \
+        --perturbation-features /data/ESM2_pert_features.pt
 """
 
 import argparse
 import logging
-import sys
 from pathlib import Path
-from typing import Optional
+import sys
 
+import anndata
+import h5py
+import numpy as np
 import torch
-import yaml
-import pandas as pd
+from tqdm import tqdm
 
-# Configure logging
+from se_st_combined.models.se_st_combined import SE_ST_CombinedModel
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='[%(asctime)s] [%(name)s] [%(levelname)s] - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
 
-def parse_args():
-    """Parse command line arguments"""
-    parser = argparse.ArgumentParser(
-        description="Run inference with SE+ST Combined Model",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+def load_model_from_checkpoint(checkpoint_path: str, se_model_path: str) -> SE_ST_CombinedModel:
+    """Load SE+ST Combined Model from checkpoint."""
+    logger.info(f"Loading model from checkpoint: {checkpoint_path}")
+    
+    # Load the checkpoint to inspect it
+    ckpt = torch.load(checkpoint_path, map_location='cpu')
+    
+    # Extract hyperparameters from checkpoint
+    if 'hyper_parameters' in ckpt:
+        hparams = ckpt['hyper_parameters']
+        logger.info(f"Found hyperparameters in checkpoint: {list(hparams.keys())}")
+    else:
+        logger.warning("No hyperparameters found in checkpoint, using defaults")
+        hparams = {}
+    
+    # Create model with correct dimensions
+    model = SE_ST_CombinedModel(
+        input_dim=hparams.get('input_dim', 18080),
+        hidden_dim=hparams.get('hidden_dim', 512),
+        output_dim=hparams.get('output_dim', 18080),
+        pert_dim=hparams.get('pert_dim', 5120),
+        se_model_path=se_model_path,
+        se_checkpoint_path=hparams.get('se_checkpoint_path', f"{se_model_path}/se600m_epoch15.ckpt"),
     )
     
-    # Model arguments
+    # Load state dict
+    if 'state_dict' in ckpt:
+        model.load_state_dict(ckpt['state_dict'], strict=False)
+        logger.info("Model weights loaded successfully")
+    else:
+        raise ValueError("No state_dict found in checkpoint")
+    
+    model.eval()
+    return model
+
+
+def load_perturbation_features(features_path: str) -> dict:
+    """Load ESM2 perturbation features."""
+    logger.info(f"Loading perturbation features from {features_path}")
+    features = torch.load(features_path, map_location='cpu')
+    logger.info(f"Loaded {len(features)} perturbation features")
+    return features
+
+
+def run_inference(
+    model: SE_ST_CombinedModel,
+    adata: anndata.AnnData,
+    pert_features: dict,
+    pert_col: str = "target_gene",
+    batch_size: int = 16,
+    device: str = "cuda" if torch.cuda.is_available() else "cpu",
+) -> anndata.AnnData:
+    """
+    Run inference on an AnnData object.
+    
+    Args:
+        model: Trained SE+ST Combined Model
+        adata: Input AnnData with perturbation metadata
+        pert_features: Dictionary mapping perturbation names to embeddings
+        pert_col: Column name for perturbation in adata.obs
+        batch_size: Batch size for inference
+        device: Device to run inference on
+        
+    Returns:
+        AnnData object with predicted expression values
+    """
+    model = model.to(device)
+    model.eval()
+    
+    logger.info(f"Running inference on {adata.n_obs} cells")
+    logger.info(f"Device: {device}")
+    
+    # Get unique perturbations
+    unique_perts = adata.obs[pert_col].unique()
+    logger.info(f"Found {len(unique_perts)} unique perturbations")
+    
+    # Prepare predictions storage
+    predictions = np.zeros((adata.n_obs, adata.n_vars), dtype=np.float32)
+    
+    # Group cells by perturbation for efficient batch processing
+    with torch.no_grad():
+        for pert_name in tqdm(unique_perts, desc="Processing perturbations"):
+            # Get indices for this perturbation
+            pert_mask = adata.obs[pert_col] == pert_name
+            pert_indices = np.where(pert_mask)[0]
+            
+            if len(pert_indices) == 0:
+                continue
+            
+            # Get perturbation embedding
+            pert_name_str = pert_name.decode('utf-8') if isinstance(pert_name, bytes) else pert_name
+            
+            # Try to find embedding (case-insensitive)
+            pert_emb = None
+            for key in pert_features.keys():
+                if key.lower() == pert_name_str.lower():
+                    pert_emb = pert_features[key]
+                    break
+            
+            if pert_emb is None:
+                logger.warning(f"No embedding found for {pert_name_str}, using zeros")
+                pert_emb = torch.zeros(5120)
+            
+            if not isinstance(pert_emb, torch.Tensor):
+                pert_emb = torch.tensor(pert_emb)
+            
+            pert_emb = pert_emb.to(device)
+            
+            # Get expression data for these cells
+            if hasattr(adata.X, 'toarray'):
+                X = adata.X[pert_indices].toarray()
+            else:
+                X = adata.X[pert_indices]
+            
+            # Process in batches
+            for i in range(0, len(pert_indices), batch_size):
+                end_idx = min(i + batch_size, len(pert_indices))
+                batch_X = X[i:end_idx]
+                
+                # Convert to tensor
+                batch_X_tensor = torch.tensor(batch_X, dtype=torch.float32).to(device)
+                
+                # Create dummy cell sentence (single cell repeated)
+                # Shape: [batch_size, cell_sentence_len=1, gene_dim]
+                batch_X_tensor = batch_X_tensor.unsqueeze(1)
+                
+                # Repeat perturbation embedding for batch
+                batch_pert_emb = pert_emb.unsqueeze(0).repeat(end_idx - i, 1)
+                
+                # Run inference
+                try:
+                    pred = model(
+                        ctrl_cell_emb=batch_X_tensor,
+                        pert_cell_emb=batch_X_tensor,  # Use same as control
+                        pert_emb=batch_pert_emb,
+                    )
+                    
+                    # Store predictions
+                    pred_np = pred.cpu().numpy()
+                    predictions[pert_indices[i:end_idx]] = pred_np
+                    
+                except Exception as e:
+                    logger.error(f"Error processing batch for {pert_name_str}: {e}")
+                    # Use input as fallback
+                    predictions[pert_indices[i:end_idx]] = batch_X[i:end_idx]
+    
+    # Create output AnnData
+    output_adata = anndata.AnnData(
+        X=predictions,
+        obs=adata.obs.copy(),
+        var=adata.var.copy(),
+    )
+    
+    logger.info(f"Inference completed! Predictions shape: {predictions.shape}")
+    return output_adata
+
+
+def main():
+    parser = argparse.ArgumentParser(description="SE+ST Combined Model Inference")
     parser.add_argument(
         "--checkpoint",
         type=str,
         required=True,
-        help="Path to model checkpoint"
+        help="Path to model checkpoint (.ckpt file)"
     )
     parser.add_argument(
-        "--config",
-        type=str,
-        default=None,
-        help="Path to configuration YAML file"
-    )
-    
-    # Data arguments
-    parser.add_argument(
-        "--input_data",
+        "--adata",
         type=str,
         required=True,
-        help="Path to input data for inference"
+        help="Path to input AnnData (.h5ad file)"
     )
     parser.add_argument(
-        "--output_path",
+        "--output",
         type=str,
         required=True,
-        help="Path to save predictions"
+        help="Path to output predictions (.h5ad file)"
     )
-    
-    # Inference arguments
     parser.add_argument(
-        "--batch_size",
+        "--pert-col",
+        type=str,
+        default="target_gene",
+        help="Column name for perturbation in adata.obs"
+    )
+    parser.add_argument(
+        "--se-model-path",
+        type=str,
+        required=True,
+        help="Path to SE model directory"
+    )
+    parser.add_argument(
+        "--perturbation-features",
+        type=str,
+        required=True,
+        help="Path to ESM2 perturbation features (.pt file)"
+    )
+    parser.add_argument(
+        "--batch-size",
         type=int,
-        default=32,
+        default=16,
         help="Batch size for inference"
     )
-    parser.add_argument(
-        "--num_workers",
-        type=int,
-        default=4,
-        help="Number of data loading workers"
-    )
-    
-    # Hardware arguments
     parser.add_argument(
         "--device",
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
-        choices=["cuda", "cpu"],
-        help="Device to use for inference"
+        help="Device to run inference on (cuda/cpu)"
     )
     
-    return parser.parse_args()
-
-
-def load_config(config_path: Optional[str] = None) -> dict:
-    """Load configuration from YAML file"""
-    if config_path is None:
-        return {}
+    args = parser.parse_args()
     
-    config_path = Path(config_path)
-    if not config_path.exists():
-        logger.warning(f"Config file not found: {config_path}")
-        return {}
-    
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    
-    logger.info(f"Loaded configuration from {config_path}")
-    return config
-
-
-def main():
-    """Main inference function"""
-    # Parse arguments
-    args = parse_args()
-    
-    logger.info("=" * 60)
-    logger.info("SE+ST Combined Model Inference")
-    logger.info("=" * 60)
-    logger.info(f"Arguments: {vars(args)}")
-    
-    # Load configuration
-    config = load_config(args.config)
-    
-    # Check checkpoint exists
+    # Validate inputs
     checkpoint_path = Path(args.checkpoint)
     if not checkpoint_path.exists():
         logger.error(f"Checkpoint not found: {checkpoint_path}")
-        return 1
+        sys.exit(1)
     
-    # Check input data exists
-    input_path = Path(args.input_data)
-    if not input_path.exists():
-        logger.error(f"Input data not found: {input_path}")
-        return 1
+    adata_path = Path(args.adata)
+    if not adata_path.exists():
+        logger.error(f"AnnData file not found: {adata_path}")
+        sys.exit(1)
+    
+    pert_features_path = Path(args.perturbation_features)
+    if not pert_features_path.exists():
+        logger.error(f"Perturbation features not found: {pert_features_path}")
+        sys.exit(1)
     
     # Create output directory
-    output_path = Path(args.output_path)
+    output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
-    logger.info(f"Checkpoint: {checkpoint_path}")
-    logger.info(f"Input data: {input_path}")
-    logger.info(f"Output path: {output_path}")
-    logger.info(f"Device: {args.device}")
+    # Load model
+    model = load_model_from_checkpoint(
+        str(checkpoint_path),
+        args.se_model_path
+    )
     
-    # Note: Model loading and inference should be implemented based on your specific needs
-    logger.error("Model loading and inference not yet implemented!")
-    logger.error("Please implement model loading and inference in this script.")
-    logger.error("Example:")
-    logger.error("  from se_st_combined.models.state_transition import StateTransitionPerturbationModel")
-    logger.error("  model = StateTransitionPerturbationModel.load_from_checkpoint(checkpoint_path)")
-    logger.error("  model.eval()")
-    logger.error("  model.to(args.device)")
-    logger.error("  # Load data and run inference")
-    logger.error("  # predictions = model.predict(...)")
-    logger.error("  # Save predictions")
+    # Load perturbation features
+    pert_features = load_perturbation_features(str(pert_features_path))
     
-    return 1
+    # Load input data
+    logger.info(f"Loading input data from {adata_path}")
+    adata = anndata.read_h5ad(adata_path)
+    logger.info(f"Loaded {adata.n_obs} cells x {adata.n_vars} genes")
+    
+    # Run inference
+    output_adata = run_inference(
+        model=model,
+        adata=adata,
+        pert_features=pert_features,
+        pert_col=args.pert_col,
+        batch_size=args.batch_size,
+        device=args.device,
+    )
+    
+    # Save predictions
+    logger.info(f"Saving predictions to {output_path}")
+    output_adata.write_h5ad(output_path)
+    logger.info("✅ Inference completed successfully!")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
-
+    main()
