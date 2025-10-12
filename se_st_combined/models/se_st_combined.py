@@ -137,6 +137,25 @@ class SE_ST_CombinedModel(PerturbationModel):
     
     def _build_st_model(self, predict_residual: bool, distributional_loss: str, transformer_backbone_key: str):
         """Build ST model for state embedding space."""
+        # Calculate transformer configuration based on hidden_dim
+        # For Llama: hidden_dim must be divisible by num_attention_heads
+        # Common configurations: 672 = 8*84 or 12*56
+        if self.st_hidden_dim % 8 == 0:
+            num_heads = 8
+            head_dim = self.st_hidden_dim // 8
+        elif self.st_hidden_dim % 12 == 0:
+            num_heads = 12
+            head_dim = self.st_hidden_dim // 12
+        else:
+            # Fallback: find largest divisor <= 16
+            for n in range(16, 0, -1):
+                if self.st_hidden_dim % n == 0:
+                    num_heads = n
+                    head_dim = self.st_hidden_dim // n
+                    break
+        
+        logger.info(f"Transformer config: hidden_dim={self.st_hidden_dim}, num_heads={num_heads}, head_dim={head_dim}")
+        
         # ST model configuration
         st_config = {
             'input_dim': self.state_dim,  # Use state embedding dimension
@@ -159,9 +178,9 @@ class SE_ST_CombinedModel(PerturbationModel):
                 'hidden_size': self.st_hidden_dim,
                 'intermediate_size': self.st_hidden_dim * 4,
                 'num_hidden_layers': 4,
-                'num_attention_heads': 8,
-                'num_key_value_heads': 8,
-                'head_dim': self.st_hidden_dim // 8,
+                'num_attention_heads': num_heads,  # Dynamically calculated
+                'num_key_value_heads': num_heads,  # Same as num_attention_heads for standard attention
+                'head_dim': head_dim,  # Dynamically calculated
                 'use_cache': False,
                 'attention_dropout': 0.0,
                 'hidden_dropout': 0.0,
