@@ -190,14 +190,20 @@ def run_inference(
                     # Use input as fallback
                     predictions[pert_indices[i:end_idx]] = batch_X
     
-    # Create output AnnData
+    # Create output AnnData with sparse matrix to save space
+    from scipy.sparse import csr_matrix
+    
+    logger.info(f"Converting predictions to sparse matrix...")
+    predictions_sparse = csr_matrix(predictions)
+    
     output_adata = anndata.AnnData(
-        X=predictions,
+        X=predictions_sparse,
         obs=adata.obs.copy(),
         var=adata.var.copy(),
     )
     
     logger.info(f"Inference completed! Predictions shape: {predictions.shape}")
+    logger.info(f"Sparse matrix density: {predictions_sparse.nnz / (predictions.shape[0] * predictions.shape[1]) * 100:.2f}%")
     return output_adata
 
 
