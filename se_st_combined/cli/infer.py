@@ -25,7 +25,7 @@ from tqdm import tqdm
 from se_st_combined.models.se_st_combined import SE_ST_CombinedModel
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed to DEBUG to see detailed logs
     format='[%(asctime)s] [%(name)s] [%(levelname)s] - %(message)s'
 )
 logger = logging.getLogger(__name__)

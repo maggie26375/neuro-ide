@@ -339,21 +339,33 @@ class StateTransitionPerturbationModel(PerturbationModel):
         The `padded` argument here is set to True if the batch is padded. Otherwise, we
         expect a single batch, so that sentences can vary in length across batches.
         """
+        # Debug logging
+        logger.debug(f"StateTransitionModel.forward - Input shapes:")
+        logger.debug(f"  pert_emb: {batch['pert_emb'].shape}")
+        logger.debug(f"  ctrl_cell_emb: {batch['ctrl_cell_emb'].shape}")
+        logger.debug(f"  padded={padded}, cell_sentence_len={self.cell_sentence_len}")
+        
         if padded:
             pert = batch["pert_emb"].reshape(-1, self.cell_sentence_len, self.pert_dim)
             basal = batch["ctrl_cell_emb"].reshape(-1, self.cell_sentence_len, self.input_dim)
+            logger.debug(f"  After reshape - pert: {pert.shape}, basal: {basal.shape}")
         else:
             # we are inferencing on a single batch, so accept variable length sentences
             pert = batch["pert_emb"].reshape(1, -1, self.pert_dim)
             basal = batch["ctrl_cell_emb"].reshape(1, -1, self.input_dim)
+            logger.debug(f"  After reshape (padded=False) - pert: {pert.shape}, basal: {basal.shape}")
 
         # Shape: [B, S, input_dim]
         pert_embedding = self.encode_perturbation(pert)
         control_cells = self.encode_basal_expression(basal)
+        
+        logger.debug(f"  After encoding - pert_embedding: {pert_embedding.shape}, control_cells: {control_cells.shape}")
 
         # Add encodings in input_dim space, then project to hidden_dim
         combined_input = pert_embedding + control_cells  # Shape: [B, S, hidden_dim]
         seq_input = combined_input  # Shape: [B, S, hidden_dim]
+        
+        logger.debug(f"  combined_input: {combined_input.shape}, seq_input: {seq_input.shape}")
 
         if self.batch_encoder is not None:
             # Extract batch indices (assume they are integers or convert from one-hot)
