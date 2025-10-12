@@ -124,6 +124,8 @@ def run_inference(
     model: SE_ST_CombinedModel,
     adata: anndata.AnnData,
     pert_features: dict,
+    pert_dim: int = 1280,
+    cell_sentence_len: int = 128,
     hvg_gene_names: list = None,
     pert_col: str = "target_gene",
     batch_size: int = 16,
@@ -136,6 +138,8 @@ def run_inference(
         model: Trained SE+ST Combined Model
         adata: Input AnnData with perturbation metadata (should be HVG-selected)
         pert_features: Dictionary mapping perturbation names to embeddings
+        pert_dim: Dimension of perturbation embeddings (from model hyperparameters)
+        cell_sentence_len: Length of cell sentence (default 128)
         hvg_gene_names: List of HVG gene names (for mapping back to full space)
         pert_col: Column name for perturbation in adata.obs
         batch_size: Batch size for inference
@@ -149,6 +153,7 @@ def run_inference(
     
     logger.info(f"Running inference on {adata.n_obs} cells")
     logger.info(f"Device: {device}")
+    logger.info(f"Perturbation embedding dim: {pert_dim}, Cell sentence length: {cell_sentence_len}")
     
     # Get unique perturbations
     unique_perts = adata.obs[pert_col].unique()
@@ -179,7 +184,7 @@ def run_inference(
             
             if pert_emb is None:
                 logger.warning(f"No embedding found for {pert_name_str}, using zeros")
-                pert_emb = torch.zeros(5120)
+                pert_emb = torch.zeros(pert_dim)
             
             if not isinstance(pert_emb, torch.Tensor):
                 pert_emb = torch.tensor(pert_emb)
@@ -201,15 +206,15 @@ def run_inference(
                 batch_X_tensor = torch.tensor(batch_X, dtype=torch.float32).to(device)
                 
                 # Create cell sentence by repeating each cell 128 times (to match training)
-                # Shape: [batch_size, cell_sentence_len=128, gene_dim]
-                batch_X_tensor = batch_X_tensor.unsqueeze(1).repeat(1, 128, 1)
+                # Shape: [curr_batch_size, cell_sentence_len, gene_dim]
+                batch_X_tensor = batch_X_tensor.unsqueeze(1).repeat(1, cell_sentence_len, 1)
                 
-                # Flatten to [batch_size*128, gene_dim] as model expects
-                batch_size = batch_X_tensor.shape[0]
+                # Flatten to [curr_batch_size*cell_sentence_len, gene_dim] as model expects
+                curr_batch_size = batch_X_tensor.shape[0]
                 batch_X_tensor = batch_X_tensor.reshape(-1, batch_X_tensor.shape[2])
                 
                 # Repeat perturbation embedding for each cell in sentence
-                batch_pert_emb = pert_emb.unsqueeze(0).repeat(batch_size * 128, 1)
+                batch_pert_emb = pert_emb.unsqueeze(0).repeat(curr_batch_size * cell_sentence_len, 1)
                 
                 # Run inference
                 try:
@@ -222,10 +227,10 @@ def run_inference(
                     
                     pred = model(batch_dict)
                     
-                    # Predictions are [batch_size*128, gene_dim]
-                    # Reshape to [batch_size, 128, gene_dim] and average
-                    pred = pred.reshape(batch_size, 128, -1)
-                    pred = pred.mean(dim=1)  # Average over cell_sentence_len → [batch_size, gene_dim]
+                    # Predictions are [curr_batch_size*cell_sentence_len, gene_dim]
+                    # Reshape to [curr_batch_size, cell_sentence_len, gene_dim] and average
+                    pred = pred.reshape(curr_batch_size, cell_sentence_len, -1)
+                    pred = pred.mean(dim=1)  # Average over cell_sentence_len → [curr_batch_size, gene_dim]
                     
                     # Store predictions
                     pred_np = pred.cpu().numpy()
@@ -352,11 +357,13 @@ def main():
         adata_hvg = adata_full
         hvg_gene_names = adata_full.var_names.tolist()
     
-    # Run inference
+    # Run inference with correct dimensions from hyperparameters
     output_adata = run_inference(
         model=model,
         adata=adata_hvg,
         pert_features=pert_features,
+        pert_dim=hparams.get('pert_dim', 1280),
+        cell_sentence_len=hparams.get('st_cell_set_len', 128),
         hvg_gene_names=hvg_gene_names,
         pert_col=args.pert_col,
         batch_size=args.batch_size,
