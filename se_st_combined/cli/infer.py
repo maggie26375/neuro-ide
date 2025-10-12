@@ -278,13 +278,16 @@ def run_inference(
                         'pert_emb': batch_pert_emb,
                     }
                     
-                    # Debug: Log shapes on first batch
-                    if i == 0 and pert_name == unique_perts[0]:
-                        logger.info(f"Debug shapes - curr_batch_size: {curr_batch_size}, cell_sentence_len: {cell_sentence_len}")
-                        logger.info(f"  ctrl_cell_emb: {batch_dict['ctrl_cell_emb'].shape}")
-                        logger.info(f"  pert_emb: {batch_dict['pert_emb'].shape}")
+                    # Always log shapes for debugging
+                    logger.info(f"🔍 Batch {pert_name_str} [{i}:{end_idx}]:")
+                    logger.info(f"  curr_batch_size: {curr_batch_size}, cell_sentence_len: {cell_sentence_len}")
+                    logger.info(f"  ctrl_cell_emb: {batch_dict['ctrl_cell_emb'].shape}")
+                    logger.info(f"  pert_emb: {batch_dict['pert_emb'].shape}")
+                    logger.info(f"  Expected total cells: {curr_batch_size * cell_sentence_len}")
                     
                     pred = model(batch_dict)
+                    
+                    logger.info(f"  ✅ Model output: {pred.shape}")
                     
                     # Predictions are [curr_batch_size*cell_sentence_len, gene_dim]
                     # Reshape to [curr_batch_size, cell_sentence_len, gene_dim] and average
@@ -296,7 +299,13 @@ def run_inference(
                     predictions[pert_indices[i:end_idx]] = pred_np
                     
                 except Exception as e:
-                    logger.error(f"Error processing batch for {pert_name_str}: {e}")
+                    logger.error(f"❌ Error processing batch for {pert_name_str}: {e}")
+                    logger.error(f"   Batch details:")
+                    logger.error(f"     curr_batch_size: {curr_batch_size}")
+                    logger.error(f"     cell_sentence_len: {cell_sentence_len}")
+                    logger.error(f"     ctrl_cell_emb shape: {batch_X_tensor.shape}")
+                    logger.error(f"     pert_emb shape: {batch_pert_emb.shape}")
+                    logger.error(f"   Full traceback:", exc_info=True)
                     # Use input as fallback
                     predictions[pert_indices[i:end_idx]] = batch_X
     
