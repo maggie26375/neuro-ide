@@ -154,9 +154,9 @@ def run_inference(
                 # Convert to tensor
                 batch_X_tensor = torch.tensor(batch_X, dtype=torch.float32).to(device)
                 
-                # Create dummy cell sentence (single cell repeated)
-                # Shape: [batch_size, cell_sentence_len=1, gene_dim]
-                batch_X_tensor = batch_X_tensor.unsqueeze(1)
+                # Create cell sentence by repeating each cell 128 times (to match training)
+                # Shape: [batch_size, cell_sentence_len=128, gene_dim]
+                batch_X_tensor = batch_X_tensor.unsqueeze(1).repeat(1, 128, 1)
                 
                 # Repeat perturbation embedding for batch
                 batch_pert_emb = pert_emb.unsqueeze(0).repeat(end_idx - i, 1)
@@ -171,6 +171,11 @@ def run_inference(
                     }
                     
                     pred = model(batch_dict)
+                    
+                    # Predictions are [batch_size, cell_sentence_len=128, gene_dim]
+                    # Average over cell_sentence_len to get per-cell prediction
+                    if pred.dim() == 3:
+                        pred = pred.mean(dim=1)  # [batch_size, gene_dim]
                     
                     # Store predictions
                     pred_np = pred.cpu().numpy()
