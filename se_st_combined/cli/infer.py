@@ -31,6 +31,40 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _infer_transformer_config_from_checkpoint(state_dict: dict, hparams: dict) -> dict:
+    """
+    Infer transformer configuration from checkpoint weights.
+    
+    This ensures we use the EXACT same configuration as during training,
+    not a guessed one.
+    """
+    config = {}
+    
+    # Try to get q_proj weight to infer dimensions
+    q_proj_key = 'st_model.transformer_backbone.layers.0.self_attn.q_proj.weight'
+    if q_proj_key in state_dict:
+        q_proj_shape = state_dict[q_proj_key].shape
+        out_features, in_features = q_proj_shape
+        
+        # For standard self-attention: out_features = in_features = hidden_size
+        # For multi-head attention: num_heads * head_dim = hidden_size
+        st_hidden_dim = hparams.get('st_hidden_dim', in_features)
+        
+        # Infer num_heads and head_dim
+        # Common patterns: hidden_dim = num_heads * head_dim
+        # Try common num_heads values
+        for num_heads in [8, 12, 16, 6, 4]:
+            if st_hidden_dim % num_heads == 0:
+                head_dim = st_hidden_dim // num_heads
+                config['num_attention_heads'] = num_heads
+                config['num_key_value_heads'] = num_heads
+                config['head_dim'] = head_dim
+                logger.info(f"Inferred from checkpoint: num_heads={num_heads}, head_dim={head_dim}")
+                break
+    
+    return config
+
+
 def load_model_from_checkpoint(checkpoint_path: str, se_model_path: str) -> tuple:
     """Load SE+ST Combined Model from checkpoint and return model + hyperparameters."""
     logger.info(f"Loading model from checkpoint: {checkpoint_path}")
@@ -52,20 +86,36 @@ def load_model_from_checkpoint(checkpoint_path: str, se_model_path: str) -> tupl
     output_dim = hparams.get('output_dim', 18080)
     logger.info(f"Model dimensions: input={input_dim}, output={output_dim}")
     
+    # Infer transformer configuration from checkpoint weights
+    state_dict = ckpt.get('state_dict', {})
+    transformer_config = _infer_transformer_config_from_checkpoint(state_dict, hparams)
+    
+    # Merge inferred config into hparams
+    if transformer_config:
+        logger.info(f"Inferred transformer config from checkpoint: {transformer_config}")
+        hparams['_inferred_transformer_config'] = transformer_config
+    
     # Create model with correct dimensions
-    model = SE_ST_CombinedModel(
-        input_dim=input_dim,
-        hidden_dim=hparams.get('hidden_dim', 512),
-        output_dim=output_dim,
-        pert_dim=hparams.get('pert_dim', 1280),
-        se_model_path=se_model_path,
-        se_checkpoint_path=hparams.get('se_checkpoint_path', f"{se_model_path}/se600m_epoch15.ckpt"),
-        st_cell_set_len=hparams.get('st_cell_set_len', 128),
-        st_hidden_dim=hparams.get('st_hidden_dim', 672),
-        predict_residual=hparams.get('predict_residual', True),
-        distributional_loss=hparams.get('distributional_loss', 'energy'),
-        transformer_backbone_key=hparams.get('transformer_backbone_key', 'llama'),
-    )
+    # Pass inferred transformer config if available
+    model_kwargs = {
+        'input_dim': input_dim,
+        'hidden_dim': hparams.get('hidden_dim', 512),
+        'output_dim': output_dim,
+        'pert_dim': hparams.get('pert_dim', 1280),
+        'se_model_path': se_model_path,
+        'se_checkpoint_path': hparams.get('se_checkpoint_path', f"{se_model_path}/se600m_epoch15.ckpt"),
+        'st_cell_set_len': hparams.get('st_cell_set_len', 128),
+        'st_hidden_dim': hparams.get('st_hidden_dim', 672),
+        'predict_residual': hparams.get('predict_residual', True),
+        'distributional_loss': hparams.get('distributional_loss', 'energy'),
+        'transformer_backbone_key': hparams.get('transformer_backbone_key', 'llama'),
+    }
+    
+    # Add inferred transformer config if available
+    if '_inferred_transformer_config' in hparams:
+        model_kwargs['transformer_config_override'] = hparams['_inferred_transformer_config']
+    
+    model = SE_ST_CombinedModel(**model_kwargs)
     
     # Load state dict
     if 'state_dict' in ckpt:

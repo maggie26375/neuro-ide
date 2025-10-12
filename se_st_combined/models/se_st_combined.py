@@ -49,6 +49,7 @@ class SE_ST_CombinedModel(PerturbationModel):
         predict_residual: bool = True,
         distributional_loss: str = "energy",
         transformer_backbone_key: str = "llama",
+        transformer_config_override: dict = None,
         **kwargs,
     ):
         """
@@ -84,6 +85,7 @@ class SE_ST_CombinedModel(PerturbationModel):
         self.freeze_se_model = freeze_se_model
         self.st_hidden_dim = st_hidden_dim
         self.st_cell_set_len = st_cell_set_len
+        self.transformer_config_override = transformer_config_override
         
         # Initialize SE model
         self._load_se_model()
@@ -96,6 +98,7 @@ class SE_ST_CombinedModel(PerturbationModel):
             predict_residual=predict_residual,
             distributional_loss=distributional_loss,
             transformer_backbone_key=transformer_backbone_key,
+            transformer_config_override=transformer_config_override,
         )
         
         logger.info(f"SE+ST Combined Model initialized:")
@@ -135,26 +138,31 @@ class SE_ST_CombinedModel(PerturbationModel):
         # network building is done by the ST model
         pass
     
-    def _build_st_model(self, predict_residual: bool, distributional_loss: str, transformer_backbone_key: str):
+    def _build_st_model(self, predict_residual: bool, distributional_loss: str, transformer_backbone_key: str, transformer_config_override: dict = None):
         """Build ST model for state embedding space."""
-        # Calculate transformer configuration based on hidden_dim
-        # For Llama: hidden_dim must be divisible by num_attention_heads
-        # Common configurations: 672 = 8*84 or 12*56
-        if self.st_hidden_dim % 8 == 0:
-            num_heads = 8
-            head_dim = self.st_hidden_dim // 8
-        elif self.st_hidden_dim % 12 == 0:
-            num_heads = 12
-            head_dim = self.st_hidden_dim // 12
+        # Use override config from checkpoint if available, otherwise calculate
+        if transformer_config_override:
+            logger.info(f"Using transformer config from checkpoint: {transformer_config_override}")
+            num_heads = transformer_config_override.get('num_attention_heads', 8)
+            head_dim = transformer_config_override.get('head_dim', self.st_hidden_dim // num_heads)
         else:
-            # Fallback: find largest divisor <= 16
-            for n in range(16, 0, -1):
-                if self.st_hidden_dim % n == 0:
-                    num_heads = n
-                    head_dim = self.st_hidden_dim // n
-                    break
-        
-        logger.info(f"Transformer config: hidden_dim={self.st_hidden_dim}, num_heads={num_heads}, head_dim={head_dim}")
+            # Calculate transformer configuration based on hidden_dim
+            # For Llama: hidden_dim must be divisible by num_attention_heads
+            # Common configurations: 672 = 8*84 or 12*56
+            if self.st_hidden_dim % 8 == 0:
+                num_heads = 8
+                head_dim = self.st_hidden_dim // 8
+            elif self.st_hidden_dim % 12 == 0:
+                num_heads = 12
+                head_dim = self.st_hidden_dim // 12
+            else:
+                # Fallback: find largest divisor <= 16
+                for n in range(16, 0, -1):
+                    if self.st_hidden_dim % n == 0:
+                        num_heads = n
+                        head_dim = self.st_hidden_dim // n
+                        break
+            logger.info(f"Calculated transformer config: hidden_dim={self.st_hidden_dim}, num_heads={num_heads}, head_dim={head_dim}")
         
         # ST model configuration
         st_config = {
