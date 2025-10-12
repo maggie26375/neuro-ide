@@ -31,8 +31,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def load_model_from_checkpoint(checkpoint_path: str, se_model_path: str) -> SE_ST_CombinedModel:
-    """Load SE+ST Combined Model from checkpoint."""
+def load_model_from_checkpoint(checkpoint_path: str, se_model_path: str) -> tuple:
+    """Load SE+ST Combined Model from checkpoint and return model + hyperparameters."""
     logger.info(f"Loading model from checkpoint: {checkpoint_path}")
     
     # Load the checkpoint to inspect it
@@ -47,14 +47,20 @@ def load_model_from_checkpoint(checkpoint_path: str, se_model_path: str) -> SE_S
         logger.warning("No hyperparameters found in checkpoint, using defaults")
         hparams = {}
     
+    # Log key dimensions
+    input_dim = hparams.get('input_dim', 18080)
+    output_dim = hparams.get('output_dim', 18080)
+    logger.info(f"Model dimensions: input={input_dim}, output={output_dim}")
+    
     # Create model with correct dimensions
     model = SE_ST_CombinedModel(
-        input_dim=hparams.get('input_dim', 18080),
+        input_dim=input_dim,
         hidden_dim=hparams.get('hidden_dim', 512),
-        output_dim=hparams.get('output_dim', 18080),
-        pert_dim=hparams.get('pert_dim', 5120),
+        output_dim=output_dim,
+        pert_dim=hparams.get('pert_dim', 1280),
         se_model_path=se_model_path,
         se_checkpoint_path=hparams.get('se_checkpoint_path', f"{se_model_path}/se600m_epoch15.ckpt"),
+        cell_sentence_len=hparams.get('st_cell_set_len', 128),
     )
     
     # Load state dict
@@ -65,7 +71,7 @@ def load_model_from_checkpoint(checkpoint_path: str, se_model_path: str) -> SE_S
         raise ValueError("No state_dict found in checkpoint")
     
     model.eval()
-    return model
+    return model, hparams
 
 
 def load_perturbation_features(features_path: str) -> dict:
@@ -76,10 +82,49 @@ def load_perturbation_features(features_path: str) -> dict:
     return features
 
 
+def select_hvg_genes(adata: anndata.AnnData, n_top_genes: int) -> anndata.AnnData:
+    """
+    Select highly variable genes (HVG) from AnnData.
+    
+    Args:
+        adata: Input AnnData with all genes
+        n_top_genes: Number of top HVG to select
+        
+    Returns:
+        AnnData with only HVG genes selected
+    """
+    logger.info(f"Selecting top {n_top_genes} highly variable genes...")
+    logger.info(f"Original data: {adata.n_obs} cells × {adata.n_vars} genes")
+    
+    # Calculate gene variance
+    from scipy.sparse import issparse
+    
+    if issparse(adata.X):
+        # For sparse matrix, compute variance efficiently
+        gene_mean = np.array(adata.X.mean(axis=0)).flatten()
+        gene_mean_sq = np.array(adata.X.power(2).mean(axis=0)).flatten()
+        gene_var = gene_mean_sq - gene_mean ** 2
+    else:
+        # For dense matrix
+        gene_var = np.var(adata.X, axis=0)
+    
+    # Select top variance genes
+    top_var_indices = np.argsort(gene_var)[-n_top_genes:]
+    hvg_gene_names = adata.var_names[top_var_indices]
+    
+    # Subset to HVG
+    adata_hvg = adata[:, hvg_gene_names].copy()
+    
+    logger.info(f"✅ Selected HVG data: {adata_hvg.n_obs} cells × {adata_hvg.n_vars} genes")
+    
+    return adata_hvg, hvg_gene_names
+
+
 def run_inference(
     model: SE_ST_CombinedModel,
     adata: anndata.AnnData,
     pert_features: dict,
+    hvg_gene_names: list = None,
     pert_col: str = "target_gene",
     batch_size: int = 16,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
@@ -89,8 +134,9 @@ def run_inference(
     
     Args:
         model: Trained SE+ST Combined Model
-        adata: Input AnnData with perturbation metadata
+        adata: Input AnnData with perturbation metadata (should be HVG-selected)
         pert_features: Dictionary mapping perturbation names to embeddings
+        hvg_gene_names: List of HVG gene names (for mapping back to full space)
         pert_col: Column name for perturbation in adata.obs
         batch_size: Batch size for inference
         device: Device to run inference on
@@ -280,8 +326,8 @@ def main():
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
-    # Load model
-    model = load_model_from_checkpoint(
+    # Load model and get hyperparameters
+    model, hparams = load_model_from_checkpoint(
         str(checkpoint_path),
         args.se_model_path
     )
@@ -291,18 +337,68 @@ def main():
     
     # Load input data
     logger.info(f"Loading input data from {adata_path}")
-    adata = anndata.read_h5ad(adata_path)
-    logger.info(f"Loaded {adata.n_obs} cells x {adata.n_vars} genes")
+    adata_full = anndata.read_h5ad(adata_path)
+    logger.info(f"Loaded {adata_full.n_obs} cells x {adata_full.n_vars} genes")
+    
+    # Select HVG if model was trained on subset of genes
+    model_input_dim = hparams.get('input_dim', adata_full.n_vars)
+    
+    if model_input_dim < adata_full.n_vars:
+        logger.info(f"Model expects {model_input_dim} genes, but data has {adata_full.n_vars}")
+        logger.info("Selecting highly variable genes...")
+        adata_hvg, hvg_gene_names = select_hvg_genes(adata_full, model_input_dim)
+    else:
+        logger.info(f"Using all {adata_full.n_vars} genes (no HVG selection needed)")
+        adata_hvg = adata_full
+        hvg_gene_names = adata_full.var_names.tolist()
     
     # Run inference
     output_adata = run_inference(
         model=model,
-        adata=adata,
+        adata=adata_hvg,
         pert_features=pert_features,
+        hvg_gene_names=hvg_gene_names,
         pert_col=args.pert_col,
         batch_size=args.batch_size,
         device=args.device,
     )
+    
+    # Map back to full gene space if HVG was used
+    if model_input_dim < adata_full.n_vars:
+        logger.info(f"Mapping predictions back to full gene space ({adata_full.n_vars} genes)...")
+        from scipy.sparse import lil_matrix
+        
+        # Create full predictions matrix (sparse for efficiency)
+        full_pred = lil_matrix((adata_full.n_obs, adata_full.n_vars), dtype=np.float16)
+        
+        # Get HVG indices in the original full matrix
+        hvg_indices = [adata_full.var_names.get_loc(gene) for gene in hvg_gene_names]
+        
+        # Convert output to dense if sparse
+        from scipy.sparse import issparse
+        if issparse(output_adata.X):
+            output_dense = output_adata.X.toarray()
+        else:
+            output_dense = output_adata.X
+        
+        # Fill HVG positions
+        full_pred[:, hvg_indices] = output_dense
+        
+        # Convert to CSR for efficiency
+        full_pred = full_pred.tocsr()
+        
+        # Create final output with full gene space
+        output_adata = anndata.AnnData(
+            X=full_pred,
+            obs=adata_full.obs.copy(),
+            var=adata_full.var.copy(),
+        )
+        
+        logger.info(f"✅ Mapped to full space: {output_adata.shape}")
+    else:
+        # Ensure we use the original obs/var
+        output_adata.obs = adata_full.obs.copy()
+        output_adata.var = adata_full.var.copy()
     
     # Save predictions with light compression (faster)
     logger.info(f"Saving predictions to {output_path}")
