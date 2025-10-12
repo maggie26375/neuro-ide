@@ -461,7 +461,8 @@ def main():
         from scipy.sparse import lil_matrix
         
         # Create full predictions matrix (sparse for efficiency)
-        full_pred = lil_matrix((adata_full.n_obs, adata_full.n_vars), dtype=np.float16)
+        # Note: scipy.sparse doesn't support float16, use float32
+        full_pred = lil_matrix((adata_full.n_obs, adata_full.n_vars), dtype=np.float32)
         
         # Get HVG indices in the original full matrix
         hvg_indices = [adata_full.var_names.get_loc(gene) for gene in hvg_gene_names]
