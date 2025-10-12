@@ -212,7 +212,17 @@ class SE_ST_CombinedModel(PerturbationModel):
         """
         # Step 1: Encode control cells to state embeddings
         ctrl_expressions = batch["ctrl_cell_emb"]  # [B*S, N_genes]
+        
+        # Debug logging
+        logger.debug(f"SE_ST_CombinedModel.forward:")
+        logger.debug(f"  Input ctrl_expressions shape: {ctrl_expressions.shape}")
+        logger.debug(f"  Expected: [B*S={ctrl_expressions.shape[0]}, N_genes={self.input_dim}]")
+        
         state_embeddings = self.encode_cells_to_state(ctrl_expressions)  # [B*S, state_dim]
+        
+        logger.debug(f"  Output state_embeddings shape: {state_embeddings.shape}")
+        logger.debug(f"  Expected: [B*S={ctrl_expressions.shape[0]}, state_dim={self.state_dim}]")
+        logger.debug(f"  pert_emb shape: {batch['pert_emb'].shape}")
         
         # Step 2: Create new batch with state embeddings
         st_batch = batch.copy()

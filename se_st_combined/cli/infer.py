@@ -60,7 +60,11 @@ def load_model_from_checkpoint(checkpoint_path: str, se_model_path: str) -> tupl
         pert_dim=hparams.get('pert_dim', 1280),
         se_model_path=se_model_path,
         se_checkpoint_path=hparams.get('se_checkpoint_path', f"{se_model_path}/se600m_epoch15.ckpt"),
-        cell_sentence_len=hparams.get('st_cell_set_len', 128),
+        st_cell_set_len=hparams.get('st_cell_set_len', 128),
+        st_hidden_dim=hparams.get('st_hidden_dim', 672),
+        predict_residual=hparams.get('predict_residual', True),
+        distributional_loss=hparams.get('distributional_loss', 'energy'),
+        transformer_backbone_key=hparams.get('transformer_backbone_key', 'llama'),
     )
     
     # Load state dict
