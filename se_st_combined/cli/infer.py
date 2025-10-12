@@ -243,6 +243,20 @@ def run_inference(
             if not isinstance(pert_emb, torch.Tensor):
                 pert_emb = torch.tensor(pert_emb)
             
+            # CRITICAL: Ensure pert_emb matches expected pert_dim
+            if pert_emb.shape[0] != pert_dim:
+                logger.warning(f"Perturbation embedding dimension mismatch!")
+                logger.warning(f"  Expected: {pert_dim}, Got: {pert_emb.shape[0]}")
+                logger.warning(f"  Truncating or padding to match model expectation")
+                
+                if pert_emb.shape[0] > pert_dim:
+                    # Truncate if too large
+                    pert_emb = pert_emb[:pert_dim]
+                else:
+                    # Pad with zeros if too small
+                    padding = torch.zeros(pert_dim - pert_emb.shape[0], dtype=pert_emb.dtype)
+                    pert_emb = torch.cat([pert_emb, padding])
+            
             pert_emb = pert_emb.to(device)
             
             # Get expression data for these cells
