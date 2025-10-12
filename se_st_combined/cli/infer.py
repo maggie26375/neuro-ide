@@ -298,9 +298,10 @@ def main():
         device=args.device,
     )
     
-    # Save predictions with compression
+    # Save predictions with light compression (faster)
     logger.info(f"Saving predictions to {output_path}")
-    output_adata.write_h5ad(output_path, compression="gzip", compression_opts=9)
+    logger.info("Saving with lzf compression (faster than gzip)...")
+    output_adata.write_h5ad(output_path, compression="lzf")
     logger.info("✅ Inference completed successfully!")
     
     # Show file size
