@@ -36,7 +36,8 @@ def load_model_from_checkpoint(checkpoint_path: str, se_model_path: str) -> SE_S
     logger.info(f"Loading model from checkpoint: {checkpoint_path}")
     
     # Load the checkpoint to inspect it
-    ckpt = torch.load(checkpoint_path, map_location='cpu')
+    # Note: weights_only=False is safe here because we trust our own checkpoints
+    ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     
     # Extract hyperparameters from checkpoint
     if 'hyper_parameters' in ckpt:
