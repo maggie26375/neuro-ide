@@ -393,6 +393,12 @@ def main():
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Device to run inference on (cuda/cpu)"
     )
+    parser.add_argument(
+        "--hvg-genes",
+        type=str,
+        default=None,
+        help="Path to pickle file with HVG gene names (optional). If provided, uses these genes instead of computing HVG."
+    )
     
     args = parser.parse_args()
     
@@ -435,8 +441,28 @@ def main():
     
     if model_input_dim < adata_full.n_vars:
         logger.info(f"Model expects {model_input_dim} genes, but data has {adata_full.n_vars}")
-        logger.info("Selecting highly variable genes...")
-        adata_hvg, hvg_gene_names = select_hvg_genes(adata_full, model_input_dim)
+        
+        # Check if HVG genes list is provided
+        if args.hvg_genes:
+            logger.info(f"Loading HVG genes from {args.hvg_genes}")
+            import pickle
+            with open(args.hvg_genes, 'rb') as f:
+                hvg_gene_names = pickle.load(f)
+            
+            logger.info(f"Loaded {len(hvg_gene_names)} HVG genes from file")
+            
+            # Verify all HVG genes exist in the data
+            missing_genes = set(hvg_gene_names) - set(adata_full.var_names)
+            if missing_genes:
+                logger.warning(f"⚠️ {len(missing_genes)} HVG genes not found in data (will be skipped)")
+                hvg_gene_names = [g for g in hvg_gene_names if g in adata_full.var_names]
+            
+            # Subset to HVG genes
+            adata_hvg = adata_full[:, hvg_gene_names].copy()
+            logger.info(f"✅ Using provided HVG: {adata_hvg.shape}")
+        else:
+            logger.info("Computing HVG using variance method...")
+            adata_hvg, hvg_gene_names = select_hvg_genes(adata_full, model_input_dim)
     else:
         logger.info(f"Using all {adata_full.n_vars} genes (no HVG selection needed)")
         adata_hvg = adata_full
