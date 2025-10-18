@@ -285,9 +285,17 @@ class PerturbationDataset(Dataset):
                 if attrs.get('encoding-type') == 'csr_matrix':
                     logger.warning(f"Skipping {Path(h5_path).name}: CSR sparse matrix not supported")
                     return  # Skip this file
-                data_key = "X"
-                n_cells, n_genes = X_ds.shape
-                logger.info(f"Will use X with shape ({n_cells}, {n_genes})")
+                elif isinstance(X_ds, h5py.Group) and 'data' in X_ds and 'indices' in X_ds and 'indptr' in X_ds:
+                    # Handle CSR format stored as H5py Group
+                    logger.info(f"Detected CSR format in {Path(h5_path).name}")
+                    data_key = "X"
+                    n_cells = X_ds["indptr"].shape[0] - 1
+                    n_genes = 18080  # Based on your data structure
+                    logger.info(f"Will use CSR X with shape ({n_cells}, {n_genes})")
+                else:
+                    data_key = "X"
+                    n_cells, n_genes = X_ds.shape
+                    logger.info(f"Will use X with shape ({n_cells}, {n_genes})")
         
         logger.info(f"Processing {n_cells} cells from {Path(h5_path).name}")
         
@@ -461,15 +469,44 @@ class PerturbationDataset(Dataset):
             cells = unique_cells[inverse_indices]
             return cells
         
+        # Helper function to read cells from dense numpy array
+        def read_cells_from_h5_dense(X_dense, indices, n_samples):
+            """
+            Read cells from dense numpy array.
+            """
+            # Sample (with replacement if needed)
+            replace = len(indices) < n_samples
+            sampled = np.random.choice(indices, size=n_samples, replace=replace)
+            
+            # Read cells directly from dense array
+            cells = X_dense[sampled, :]
+            return cells
+        
         # Open H5 file and read only the required cells
         with h5py.File(spec['h5_path'], 'r') as h5_file:
             X = h5_file[spec['data_key']]
             
-            # Read perturbed cells
-            pert_cells = read_cells_from_h5(X, spec['pert_indices'], self.cell_sentence_len)
-            
-            # Read control cells
-            ctrl_cells = read_cells_from_h5(X, spec['ctrl_indices'], self.cell_sentence_len)
+            # Handle CSR format
+            if isinstance(X, h5py.Group) and 'data' in X and 'indices' in X and 'indptr' in X:
+                # Convert CSR to dense for the required cells
+                from scipy.sparse import csr_matrix
+                csr_data = X["data"][:]
+                csr_indices = X["indices"][:]
+                csr_indptr = X["indptr"][:]
+                csr_matrix_obj = csr_matrix((csr_data, csr_indices, csr_indptr), shape=(csr_indptr.shape[0]-1, 18080))
+                X_dense = csr_matrix_obj.toarray()
+                
+                # Read perturbed cells from dense matrix
+                pert_cells = read_cells_from_h5_dense(X_dense, spec['pert_indices'], self.cell_sentence_len)
+                
+                # Read control cells from dense matrix
+                ctrl_cells = read_cells_from_h5_dense(X_dense, spec['ctrl_indices'], self.cell_sentence_len)
+            else:
+                # Read perturbed cells
+                pert_cells = read_cells_from_h5(X, spec['pert_indices'], self.cell_sentence_len)
+                
+                # Read control cells
+                ctrl_cells = read_cells_from_h5(X, spec['ctrl_indices'], self.cell_sentence_len)
         
         return {
             'ctrl_cell_emb': torch.from_numpy(ctrl_cells).float(),  # [cell_sentence_len, gene_dim]
