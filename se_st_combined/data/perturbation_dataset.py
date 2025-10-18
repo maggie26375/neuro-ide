@@ -282,11 +282,8 @@ class PerturbationDataset(Dataset):
             else:
                 X_ds = f["X"]
                 attrs = dict(X_ds.attrs) if hasattr(X_ds, 'attrs') else {}
-                if attrs.get('encoding-type') == 'csr_matrix':
-                    logger.warning(f"Skipping {Path(h5_path).name}: CSR sparse matrix not supported")
-                    return  # Skip this file
-                elif isinstance(X_ds, h5py.Group) and 'data' in X_ds and 'indices' in X_ds and 'indptr' in X_ds:
-                    # Handle CSR format stored as H5py Group
+                if attrs.get('encoding-type') == 'csr_matrix' or (isinstance(X_ds, h5py.Group) and 'data' in X_ds and 'indices' in X_ds and 'indptr' in X_ds):
+                    # Handle CSR format (both with encoding-type and without)
                     logger.info(f"Detected CSR format in {Path(h5_path).name}")
                     data_key = "X"
                     n_cells = X_ds["indptr"].shape[0] - 1
@@ -482,25 +479,47 @@ class PerturbationDataset(Dataset):
             cells = X_dense[sampled, :]
             return cells
         
+        # Helper function to read cells from CSR format (based on STATE's method)
+        def read_cells_from_csr(h5_file, indices, n_samples):
+            """
+            Read cells from CSR format using STATE's method.
+            """
+            # Sample (with replacement if needed)
+            replace = len(indices) < n_samples
+            sampled = np.random.choice(indices, size=n_samples, replace=replace)
+            
+            cells = []
+            for idx in sampled:
+                # Use STATE's CSR reading logic
+                indptr = h5_file["/X/indptr"]
+                start_ptr = indptr[idx]
+                end_ptr = indptr[idx + 1]
+                
+                if start_ptr == end_ptr:
+                    # Empty row
+                    cell_data = np.zeros(18080, dtype=np.float32)
+                else:
+                    sub_data = h5_file["/X/data"][start_ptr:end_ptr]
+                    sub_indices = h5_file["/X/indices"][start_ptr:end_ptr]
+                    
+                    # Create dense representation
+                    cell_data = np.zeros(18080, dtype=np.float32)
+                    cell_data[sub_indices] = sub_data
+                
+                cells.append(cell_data)
+            
+            return np.array(cells)
+        
         # Open H5 file and read only the required cells
         with h5py.File(spec['h5_path'], 'r') as h5_file:
             X = h5_file[spec['data_key']]
             
-            # Handle CSR format
-            if isinstance(X, h5py.Group) and 'data' in X and 'indices' in X and 'indptr' in X:
-                # Convert CSR to dense for the required cells
-                from scipy.sparse import csr_matrix
-                csr_data = X["data"][:]
-                csr_indices = X["indices"][:]
-                csr_indptr = X["indptr"][:]
-                csr_matrix_obj = csr_matrix((csr_data, csr_indices, csr_indptr), shape=(csr_indptr.shape[0]-1, 18080))
-                X_dense = csr_matrix_obj.toarray()
-                
-                # Read perturbed cells from dense matrix
-                pert_cells = read_cells_from_h5_dense(X_dense, spec['pert_indices'], self.cell_sentence_len)
-                
-                # Read control cells from dense matrix
-                ctrl_cells = read_cells_from_h5_dense(X_dense, spec['ctrl_indices'], self.cell_sentence_len)
+            # Handle CSR format using STATE's method
+            attrs = dict(X.attrs) if hasattr(X, 'attrs') else {}
+            if attrs.get('encoding-type') == 'csr_matrix' or (isinstance(X, h5py.Group) and 'data' in X and 'indices' in X and 'indptr' in X):
+                # Use STATE's CSR reading method
+                pert_cells = read_cells_from_csr(h5_file, spec['pert_indices'], self.cell_sentence_len)
+                ctrl_cells = read_cells_from_csr(h5_file, spec['ctrl_indices'], self.cell_sentence_len)
             else:
                 # Read perturbed cells
                 pert_cells = read_cells_from_h5(X, spec['pert_indices'], self.cell_sentence_len)
