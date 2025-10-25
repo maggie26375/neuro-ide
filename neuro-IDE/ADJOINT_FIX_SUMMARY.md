@@ -6,6 +6,7 @@
 
 1. **`odeint_adjoint` 调用错误** - 使用 `odeint_adjoint` 时，传入的函数必须是 `nn.Module` 实例
 2. **训练脚本变量名拼写错误** - `checkback_callback` 应为 `checkpoint_callback`
+3. **Lightning 导入不一致** - 混用了 `pytorch_lightning` (旧版) 和 `lightning.pytorch` (新版)
 
 ## 修复详情
 
@@ -57,6 +58,28 @@ callbacks.append(checkpoint_callback)  # 正确：checkpoint_callback
 
 **修改位置：** `cli/train_neural_ode.py:122`
 
+### 3. 修复文件：`cli/train_neural_ode.py`
+
+**问题：** 第 9-11 行和第 92 行，使用了旧版本的 Lightning 导入
+
+```python
+# 修复前
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
+from pytorch_lightning.loggers import TensorBoardLogger
+...
+trainer = pl.Trainer(...)
+
+# 修复后
+from lightning.pytorch import Trainer
+from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
+from lightning.pytorch.loggers import TensorBoardLogger
+...
+trainer = Trainer(...)
+```
+
+**修改位置：** `cli/train_neural_ode.py:9-11, 92`
+
 ## 技术细节
 
 ### 为什么需要 nn.Module 包装器？
@@ -87,10 +110,21 @@ python test_neural_ode.py
 ✓ All tests passed! Neural ODE is working correctly.
 ```
 
+### 为什么需要统一 Lightning 导入？
+
+从 Lightning 2.0 开始，推荐使用新的导入路径：
+- **旧版本**（已弃用）: `import pytorch_lightning as pl`
+- **新版本**（推荐）: `from lightning.pytorch import Trainer`
+
+混用不同版本的导入会导致：
+1. 在某些环境中可能无法找到 `pytorch_lightning` 模块
+2. 不同版本的 API 可能存在细微差异
+3. 代码维护困难，不利于版本升级
+
 ## 修复的文件列表
 
-1. `models/neural_ode_perturbation.py` - Neural ODE 核心模型
-2. `cli/train_neural_ode.py` - 训练脚本
+1. `models/neural_ode_perturbation.py` - Neural ODE 核心模型（修复 adjoint 调用）
+2. `cli/train_neural_ode.py` - 训练脚本（修复变量名拼写和 Lightning 导入）
 
 ## 使用说明
 

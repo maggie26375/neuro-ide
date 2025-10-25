@@ -6,13 +6,12 @@ This script provides training functionality for the integrated Neural ODE system
 
 import torch
 import torch.nn as nn
-from lightning.pytorch import Trainer
-from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
-from lightning.pytorch.loggers import TensorBoardLogger
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
+from pytorch_lightning.loggers import TensorBoardLogger
 import hydra
 from omegaconf import DictConfig
 import logging
-from typing import Tuple
 
 from ..models.se_st_combined_neural_ode import SE_ST_NeuralODE_Model
 from ..data.perturbation_dataset import PerturbationDataModule
@@ -28,9 +27,7 @@ def train_neural_ode(
     ode_hidden_dim: int = 128,
     ode_layers: int = 3,
     time_range: Tuple[float, float] = (0.0, 1.0),
-    num_time_points: int = 10,
-    se_model_path: str = "SE-600M",
-    se_checkpoint_path: str = "SE-600M/se600m_epoch15.ckpt"
+    num_time_points: int = 10
 ) -> SE_ST_NeuralODE_Model:
     """
     训练 Neural ODE 模型
@@ -45,8 +42,6 @@ def train_neural_ode(
         ode_layers: ODE 层数
         time_range: 时间范围
         num_time_points: 时间点数
-        se_model_path: SE 模型路径
-        se_checkpoint_path: SE 检查点路径
     
     Returns:
         训练好的模型
@@ -55,14 +50,8 @@ def train_neural_ode(
     # 创建模型
     model = SE_ST_NeuralODE_Model(
         input_dim=18080,
-        hidden_dim=512,
-        output_dim=512,
         pert_dim=1280,
-        se_model_path=se_model_path,
-        se_checkpoint_path=se_checkpoint_path,
-        freeze_se_model=True,
         st_hidden_dim=512,
-        st_cell_set_len=128,
         use_neural_ode=use_neural_ode,
         ode_hidden_dim=ode_hidden_dim,
         ode_layers=ode_layers,
@@ -89,7 +78,7 @@ def train_neural_ode(
     )
     
     # 训练器配置
-    trainer = Trainer(
+    trainer = pl.Trainer(
         max_epochs=max_epochs,
         callbacks=callbacks,
         logger=logger_tb,
@@ -148,9 +137,7 @@ def main(cfg: DictConfig) -> None:
         ode_hidden_dim=cfg.model.ode_hidden_dim,
         ode_layers=cfg.model.ode_layers,
         time_range=tuple(cfg.model.time_range),
-        num_time_points=cfg.model.num_time_points,
-        se_model_path=cfg.model.se_model_path,
-        se_checkpoint_path=cfg.model.se_checkpoint_path
+        num_time_points=cfg.model.num_time_points
     )
     
     logger.info("Training completed successfully!")

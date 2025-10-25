@@ -1,0 +1,128 @@
+# Neural ODE Configuration
+# Configuration for Neural ODE-based perturbation prediction model
+
+# Model configuration
+model:
+  _target_: se_st_combined.models.se_st_combined_neural_ode.SE_ST_NeuralODE_Model
+  
+  # 基础参数
+  input_dim: 18080
+  pert_dim: 1280
+  st_hidden_dim: 512
+  freeze_se_model: true
+  
+  # Neural ODE 参数
+  use_neural_ode: true
+  ode_hidden_dim: 128
+  ode_layers: 3
+  time_range: [0.0, 1.0]
+  num_time_points: 10
+  
+  # 训练参数
+  lr: 1e-4
+  batch_size: 16
+  max_epochs: 100
+
+# 数据配置
+data:
+  data_dir: "/data"
+  batch_size: 16
+  cell_sentence_len: 128
+  num_workers: 4
+  
+  # 数据集配置
+  datasets:
+    - name: "competition_train"
+      path: "/data/competition_train.h5"
+      split: "train"
+    - name: "k562"
+      path: "/data/k562.h5"
+      split: "train"
+    - name: "hepg2"
+      path: "/data/hepg2.h5"
+      split: "val"
+    - name: "rpe1"
+      path: "/data/rpe1.h5"
+      split: "test"
+
+# 训练配置
+training:
+  max_epochs: 100
+  val_check_interval: 0.5
+  gradient_clip_val: 1.0
+  precision: 16
+  
+  # Neural ODE 特定参数
+  ode_rtol: 1e-3
+  ode_atol: 1e-4
+  ode_method: "dopri5"
+  
+  # 优化器配置
+  optimizer:
+    _target_: torch.optim.Adam
+    lr: 1e-4
+    weight_decay: 1e-5
+  
+  # 学习率调度器
+  lr_scheduler:
+    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+    T_max: 100
+    eta_min: 1e-6
+
+# 主动感知层配置
+active_perception:
+  input_dim: 512
+  feature_dim: 128
+  num_features: 10
+  attention_dim: 128
+  uncertainty_threshold: 0.5
+  sampling_budget: 10
+
+# 时间控制层配置
+temporal_control:
+  input_dim: 512
+  hidden_dim: 256
+  num_time_steps: 10
+  intervention_dim: 128
+  patience: 3
+
+# 自适应表征层配置
+adaptive_representation:
+  input_dim: 512
+  max_dim: 512
+  min_dim: 64
+  num_compression_levels: 4
+  compression_ratio: 0.8
+
+# 集成系统配置
+integrated_system:
+  input_dim: 512
+  feature_dim: 128
+  num_features: 10
+  max_dim: 512
+  min_dim: 64
+  hidden_dim: 256
+  num_time_steps: 10
+  intervention_dim: 128
+
+# 日志配置
+logging:
+  level: "INFO"
+  log_dir: "logs"
+  log_interval: 100
+  
+# 检查点配置
+checkpoint:
+  save_dir: "checkpoints"
+  save_top_k: 3
+  monitor: "val_loss"
+  mode: "min"
+  save_last: false
+  save_on_train_epoch_end: false
+
+# 可视化配置
+visualization:
+  plot_trajectories: true
+  plot_velocity_fields: true
+  save_plots: true
+  plot_dir: "plots"
