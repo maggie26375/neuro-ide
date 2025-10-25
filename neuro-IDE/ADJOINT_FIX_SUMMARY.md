@@ -306,7 +306,96 @@ trajectory = model(initial_states, perturbation_emb, return_trajectory=True)
    - 使用更宽松的容差（增大 `rtol` 和 `atol`）
    - 使用不同的求解器（如 `euler` 代替 `dopri5`）
 
+## 分析和可视化工具
+
+### 9. 新增功能：`utils/neural_ode_analysis.py`
+
+**功能：** 完整的 Neural ODE 动力学分析和可视化工具包
+
+#### 核心功能
+
+1. **`analyze_perturbation_dynamics()`** - 分析扰动响应动力学
+   - 完整状态轨迹
+   - 速度场计算
+   - 响应幅度统计
+   - 收敛性指标
+   - 内在维度分析
+
+2. **`visualize_perturbation_dynamics()`** - 多面板可视化
+   - 响应幅度随时间变化
+   - 速度场演化
+   - PCA 投影轨迹
+   - 3D 轨迹可视化
+   - 相位图分析
+   - 收敛性指标展示
+
+3. **`compare_perturbations()`** - 多扰动对比
+   - 不同扰动的响应对比
+   - 收敛性对比
+   - 最终状态分布对比
+
+4. **`export_analysis_data()`** - 数据导出
+   - 轨迹数据 (.npy)
+   - 速度场数据 (.npy)
+   - 指标报告 (.txt)
+
+#### 使用示例
+
+```python
+from utils.neural_ode_analysis import (
+    analyze_perturbation_dynamics,
+    visualize_perturbation_dynamics
+)
+
+# 分析动力学
+results = analyze_perturbation_dynamics(
+    model,
+    initial_states,
+    perturbation_emb,
+    num_time_points=50
+)
+
+# 可视化
+fig = visualize_perturbation_dynamics(
+    results,
+    save_path='outputs/dynamics.png',
+    sample_trajectories=5
+)
+```
+
+#### 测试验证
+
+运行测试脚本：
+
+```bash
+python test_neural_ode_analysis.py
+```
+
+测试结果：
+```
+✓ Analysis completed successfully!
+  Trajectory shape: (20, 8, 64)
+  Velocity field shape: (20, 8, 64)
+  Convergence Metrics:
+    Final velocity (mean): 0.3797
+    Trajectory length: 0.3780
+    Is converging: False
+✓ Visualization created successfully!
+✓ Comparison visualization created successfully!
+✓ Data export successful!
+✓ Trajectory consistency checks passed!
+```
+
+**修改位置：**
+- `utils/neural_ode_analysis.py` - 新增文件（完整实现）
+- `utils/__init__.py` - 添加导出
+- `utils/README.md` - 新增文档
+- `test_neural_ode_analysis.py` - 新增测试
+
+详细文档请参考：`utils/README.md`
+
 ## 相关链接
 
 - [torchdiffeq 文档](https://github.com/rtqichen/torchdiffeq)
 - [Neural ODE 论文](https://arxiv.org/abs/1806.07366)
+- [分析工具文档](utils/README.md)
