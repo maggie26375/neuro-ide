@@ -28,21 +28,23 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         num_time_points: int = 10,
         **kwargs
     ):
-        # 先调用父类初始化
+        # 先调用父类初始化（会设置 self.state_dim）
         super().__init__(**kwargs)
-        
+
         self.use_neural_ode = use_neural_ode
-        
+
         if self.use_neural_ode:
-            # 获取 SE 模型的输出维度
+            # 父类初始化后，self.state_dim 已经被设置
             # SE 模型输出的是 state_dim，我们需要将其映射到 st_hidden_dim
-            self.se_output_dim = self.state_dim if hasattr(self, 'state_dim') else 512
+            print(f"DEBUG: self.state_dim = {self.state_dim}, self.st_hidden_dim = {self.st_hidden_dim}")
 
             # 如果 SE 输出维度与 ST 隐藏维度不同，添加映射层
-            if self.se_output_dim != self.st_hidden_dim:
-                self.state_projection = nn.Linear(self.se_output_dim, self.st_hidden_dim)
+            if self.state_dim != self.st_hidden_dim:
+                self.state_projection = nn.Linear(self.state_dim, self.st_hidden_dim)
+                print(f"DEBUG: Created projection layer: {self.state_dim} -> {self.st_hidden_dim}")
             else:
                 self.state_projection = nn.Identity()
+                print(f"DEBUG: Using Identity projection")
 
             # 替换 ST 模型为 Neural ODE 模型
             self.neural_ode_model = NeuralODEPerturbationModel(
