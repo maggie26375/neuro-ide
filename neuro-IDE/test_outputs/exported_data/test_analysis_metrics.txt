@@ -1,0 +1,8 @@
+Convergence Metrics:
+==================================================
+final_velocity_mean: 0.4028870165348053
+final_velocity_std: 0.06753036379814148
+trajectory_length: 0.4032535254955292
+is_converging: True
+convergence_rate: 1.002719759941101
+intrinsic_dimensionality: 1

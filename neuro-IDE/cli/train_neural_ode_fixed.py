@@ -13,9 +13,13 @@ import hydra
 from omegaconf import DictConfig
 import logging
 from typing import Tuple
+import sys
+import os
 
-from ..models.se_st_combined_neural_ode import SE_ST_NeuralODE_Model
-from ..data.perturbation_dataset import PerturbationDataset
+# Add the parent directory to the path to fix imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from models.se_st_combined_neural_ode import SE_ST_NeuralODE_Model
 from se_st_combined.cli.train import SE_ST_DataModule
 
 logger = logging.getLogger(__name__)
