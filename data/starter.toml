@@ -9,6 +9,7 @@ replogle_h1 = "train"
 
 # Zeroshot specifications - entire cell types go to val or test
 [zeroshot]
+"replogle_h1.rpe1" = "val"
 "replogle_h1.hepg2" = "test"
 
 # Fewshot specifications - explicit perturbation lists

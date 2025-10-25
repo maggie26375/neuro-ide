@@ -322,11 +322,14 @@ class PerturbationDataset(Dataset):
         
         # Get unique perturbations (excluding control)
         unique_perts = set()
+        unique_cell_types = set()
         for (pert, batch, ct), indices in cells_by_pert_batch.items():
+            unique_cell_types.add(ct)
             if pert != self.control_pert:
                 unique_perts.add(pert)
-        
+
         logger.info(f"Found {len(unique_perts)} unique perturbations (excluding control)")
+        logger.info(f"🔍 Cell types in {Path(h5_path).name}: {sorted(unique_cell_types)}")
         
         # Get zeroshot configuration
         zeroshot_config = self.config.get("zeroshot", {})
@@ -341,7 +344,8 @@ class PerturbationDataset(Dataset):
                     celltype_splits[parts[1]] = split_val
         
         logger.info(f"Zeroshot cell type splits: {celltype_splits}")
-        
+        logger.info(f"🎯 Current dataset split: {self.split}")
+
         # Create pairs for each perturbation
         n_pairs_created = 0
         for pert_name in unique_perts:
@@ -358,7 +362,11 @@ class PerturbationDataset(Dataset):
                     ct_split = celltype_splits.get(ct, "train")  # default to train
                     if ct_split == self.split:
                         all_pert_cells.extend([(idx, batch, ct) for idx in indices])
-            
+                    else:
+                        # Debug: show why cells are being filtered out
+                        if len(indices) > 0:
+                            logger.debug(f"  Skipping {len(indices)} cells of type '{ct}' for pert '{pert_name}' (ct_split={ct_split}, current_split={self.split})")
+
             if len(all_pert_cells) == 0:
                 continue
             
