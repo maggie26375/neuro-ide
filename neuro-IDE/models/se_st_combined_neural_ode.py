@@ -49,9 +49,10 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
             self.st_model = None
     
     def forward(self, batch: Dict[str, torch.Tensor], padded: bool = True) -> torch.Tensor:
-        ctrl_expressions = batch["ctrl_expressions"]  # [B*S, N_genes]
+        # 支持两种键名：ctrl_expressions 和 ctrl_cell_emb
+        ctrl_expressions = batch.get("ctrl_expressions", batch.get("ctrl_cell_emb"))  # [B*S, N_genes]
         pert_emb = batch["pert_emb"]                 # [B, pert_dim]
-        
+
         # 1. SE Encoder: 基因表达 -> 状态嵌入
         initial_states = self.encode_cells_to_state(ctrl_expressions)  # [B*S, state_dim]
         
@@ -75,22 +76,23 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         return predictions
     
     def get_perturbation_trajectory(
-        self, 
+        self,
         batch: Dict[str, torch.Tensor],
         num_time_points: int = 20
     ) -> torch.Tensor:
         """
         获取扰动轨迹，用于分析细胞状态演化
-        
+
         Returns:
             trajectory: [num_time_points, batch_size, state_dim]
         """
         if not self.use_neural_ode:
             raise ValueError("Neural ODE not enabled")
-        
-        ctrl_expressions = batch["ctrl_expressions"]
+
+        # 支持两种键名：ctrl_expressions 和 ctrl_cell_emb
+        ctrl_expressions = batch.get("ctrl_expressions", batch.get("ctrl_cell_emb"))
         pert_emb = batch["pert_emb"]
-        
+
         initial_states = self.encode_cells_to_state(ctrl_expressions)
         
         # 处理扰动嵌入
