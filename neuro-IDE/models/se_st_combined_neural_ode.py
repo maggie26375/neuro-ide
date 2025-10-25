@@ -125,7 +125,8 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
             )  # 返回 [batch, seq_len, gene_dim]
 
             # 4. Flatten 回 2D 以匹配后续处理
-            predictions = predictions_3d.reshape(-1, self.output_dim)  # [B*S, gene_dim]
+            # predictions_3d is [batch, seq_len, gene_dim], gene_dim = input_dim = 18080
+            predictions = predictions_3d.reshape(-1, self.input_dim)  # [B*S, gene_dim]
         else:
             # 使用原有 ST 模型（2D 处理）
             if is_3d_input:
@@ -226,10 +227,13 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         target = batch["pert_cell_emb"]
 
         # 获取target的实际形状来确定如何reshape
+        # Neural ODE输出的是gene_dim (input_dim)，不是output_dim
+        gene_dim = self.input_dim if self.use_neural_ode else self.output_dim
+
         if target.dim() == 3:
             # Target是3D [B, S, dim]，predictions应该也是对应的形状
             batch_size, seq_len, _ = target.shape
-            predictions = predictions.reshape(batch_size, seq_len, self.output_dim)
+            predictions = predictions.reshape(batch_size, seq_len, gene_dim)
         elif padded:
             # Target是2D，尝试reshape
             total_cells = predictions.shape[0]
@@ -237,14 +241,14 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
             if total_cells % self.st_cell_set_len != 0:
                 # 不能整除，说明batch大小不对
                 # 直接使用实际的维度
-                predictions = predictions.reshape(1, -1, self.output_dim)
-                target = target.reshape(1, -1, self.output_dim)
+                predictions = predictions.reshape(1, -1, gene_dim)
+                target = target.reshape(1, -1, gene_dim)
             else:
-                predictions = predictions.reshape(batch_size, self.st_cell_set_len, self.output_dim)
-                target = target.reshape(batch_size, self.st_cell_set_len, self.output_dim)
+                predictions = predictions.reshape(batch_size, self.st_cell_set_len, gene_dim)
+                target = target.reshape(batch_size, self.st_cell_set_len, gene_dim)
         else:
-            predictions = predictions.reshape(1, -1, self.output_dim)
-            target = target.reshape(1, -1, self.output_dim)
+            predictions = predictions.reshape(1, -1, gene_dim)
+            target = target.reshape(1, -1, gene_dim)
 
         if self.use_neural_ode:
             # 使用 Neural ODE 的损失函数
@@ -262,10 +266,13 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         target = batch["pert_cell_emb"]
 
         # 获取target的实际形状来确定如何reshape
+        # Neural ODE输出的是gene_dim (input_dim)，不是output_dim
+        gene_dim = self.input_dim if self.use_neural_ode else self.output_dim
+
         if target.dim() == 3:
             # Target是3D [B, S, dim]，predictions应该也是对应的形状
             batch_size, seq_len, _ = target.shape
-            predictions = predictions.reshape(batch_size, seq_len, self.output_dim)
+            predictions = predictions.reshape(batch_size, seq_len, gene_dim)
         elif padded:
             # Target是2D，尝试reshape
             total_cells = predictions.shape[0]
@@ -273,14 +280,14 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
             if total_cells % self.st_cell_set_len != 0:
                 # 不能整除，说明batch大小不对
                 # 直接使用实际的维度
-                predictions = predictions.reshape(1, -1, self.output_dim)
-                target = target.reshape(1, -1, self.output_dim)
+                predictions = predictions.reshape(1, -1, gene_dim)
+                target = target.reshape(1, -1, gene_dim)
             else:
-                predictions = predictions.reshape(batch_size, self.st_cell_set_len, self.output_dim)
-                target = target.reshape(batch_size, self.st_cell_set_len, self.output_dim)
+                predictions = predictions.reshape(batch_size, self.st_cell_set_len, gene_dim)
+                target = target.reshape(batch_size, self.st_cell_set_len, gene_dim)
         else:
-            predictions = predictions.reshape(1, -1, self.output_dim)
-            target = target.reshape(1, -1, self.output_dim)
+            predictions = predictions.reshape(1, -1, gene_dim)
+            target = target.reshape(1, -1, gene_dim)
 
         if self.use_neural_ode:
             # 使用 Neural ODE 的损失函数
