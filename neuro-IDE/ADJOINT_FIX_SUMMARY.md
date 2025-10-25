@@ -1,12 +1,18 @@
-# Neural ODE Adjoint 参数问题修复总结
+# Neural ODE 和感知层Bug修复总结
 
 ## 问题描述
 
-在 neuro-IDE 项目中，Neural ODE 模型存在以下几个 bug：
+在 neuro-IDE 项目中发现以下 bug：
 
+### Neural ODE 相关
 1. **`odeint_adjoint` 调用错误** - 使用 `odeint_adjoint` 时，传入的函数必须是 `nn.Module` 实例
 2. **训练脚本变量名拼写错误** - `checkback_callback` 应为 `checkpoint_callback`
 3. **Lightning 导入不一致** - 混用了 `pytorch_lightning` (旧版) 和 `lightning.pytorch` (新版)
+
+### 感知层相关
+4. **Active Perception Layer 维度不匹配** - 注意力机制中掩码维度广播问题
+5. **Temporal Control Layer 输入格式错误** - 状态预测器输入维度计算错误
+6. **Adaptive Representation Network 张量转换问题** - 初始投影层缺失和质量评估器维度不匹配
 
 ## 修复详情
 
@@ -121,10 +127,72 @@ python test_neural_ode.py
 2. 不同版本的 API 可能存在细微差异
 3. 代码维护困难，不利于版本升级
 
+### 4. 修复文件：`models/active_perception.py`
+
+**问题：** 第 198 行，掩码维度不匹配
+
+```python
+# 修复前
+masked_encoded = encoded * selected_mask[:, i:i+1].unsqueeze(-1)
+# shape: [batch_size, attention_dim] * [batch_size, 1, 1] - 广播错误
+
+# 修复后
+mask_expanded = selected_mask[:, i:i+1].expand(-1, self.attention_dim)
+masked_encoded = encoded * mask_expanded
+# shape: [batch_size, attention_dim] * [batch_size, attention_dim] - 正确
+```
+
+**修改位置：** `models/active_perception.py:197-199`
+
+### 5. 修复文件：`models/temporal_control.py`
+
+**问题：** 第 73-77 行，状态预测器输入维度错误
+
+```python
+# 修复前
+self.state_predictor = nn.Sequential(
+    nn.Linear(hidden_dim + intervention_dim, hidden_dim),  # 错误：期望维度不匹配
+    ...
+)
+
+# 修复后
+self.state_predictor = nn.Sequential(
+    nn.Linear(input_dim + input_dim + hidden_dim, hidden_dim),  # 正确：匹配实际输入
+    ...
+)
+```
+
+**修改位置：** `models/temporal_control.py:73-77, 181-206`
+
+### 6. 修复文件：`models/adaptive_representation.py`
+
+**问题：** 缺少初始投影层和质量评估器维度不匹配
+
+```python
+# 修复前
+compressed_repr = x  # x 是 input_dim，但后续需要 max_dim
+quality_score = self.quality_assessor(adaptive_repr)  # adaptive_repr 可能不是 max_dim
+
+# 修复后
+# 添加初始投影层
+self.initial_projection = nn.Linear(input_dim, max_dim)
+x_projected = self.initial_projection(x)
+# 使用投影前的表征进行质量评估
+quality_score = self.quality_assessor(attended_repr)  # attended_repr 是 max_dim
+```
+
+**修改位置：** `models/adaptive_representation.py:39-40, 128-129, 154-155`
+
 ## 修复的文件列表
 
+### Neural ODE 修复
 1. `models/neural_ode_perturbation.py` - Neural ODE 核心模型（修复 adjoint 调用）
 2. `cli/train_neural_ode.py` - 训练脚本（修复变量名拼写和 Lightning 导入）
+
+### 感知层修复
+3. `models/active_perception.py` - 主动感知层（修复掩码维度广播）
+4. `models/temporal_control.py` - 时间控制层（修复输入维度和干预效果计算）
+5. `models/adaptive_representation.py` - 自适应表征网络（修复投影层和质量评估）
 
 ## 使用说明
 

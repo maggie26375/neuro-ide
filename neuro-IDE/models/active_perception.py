@@ -186,10 +186,17 @@ class ActivePerceptionLayer(nn.Module):
         
         for i, feature in enumerate(available_features):
             if selected_mask[:, i].sum() > 0:  # 如果这个特征被选中
+                # 确保特征维度正确 [batch_size, feature_dim]
+                if feature.dim() == 1:
+                    feature = feature.unsqueeze(0).expand(batch_size, -1)
+                elif feature.dim() == 2 and feature.size(0) != batch_size:
+                    feature = feature.unsqueeze(0).expand(batch_size, -1)
+                
                 # 编码特征
                 encoded = self.feature_encoder[i](feature)
-                # 应用选择掩码
-                masked_encoded = encoded * selected_mask[:, i:i+1].unsqueeze(-1)
+                # 应用选择掩码 - 扩展维度以匹配 [batch_size, attention_dim]
+                mask_expanded = selected_mask[:, i:i+1].expand(-1, self.attention_dim)
+                masked_encoded = encoded * mask_expanded
                 encoded_features.append(masked_encoded)
         
         if encoded_features:

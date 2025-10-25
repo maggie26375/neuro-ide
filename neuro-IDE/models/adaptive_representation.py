@@ -35,7 +35,10 @@ class AdaptiveRepresentationNetwork(nn.Module):
         self.min_dim = min_dim
         self.num_compression_levels = num_compression_levels
         self.compression_ratio = compression_ratio
-        
+
+        # 初始投影层（将 input_dim 投影到 max_dim）
+        self.initial_projection = nn.Linear(input_dim, max_dim)
+
         # 维度决策器
         self.dimension_controller = nn.Sequential(
             nn.Linear(input_dim, 256),
@@ -112,14 +115,24 @@ class AdaptiveRepresentationNetwork(nn.Module):
             target_dim_ratio = target_complexity
         else:
             target_dim_ratio = self.dimension_controller(x)
-        
-        target_dim = int(self.min_dim + (self.max_dim - self.min_dim) * target_dim_ratio)
-        
-        # 2. 生成可学习掩码
+
+        # 确保 target_dim_ratio 是标量值用于计算整数维度
+        if target_dim_ratio.dim() > 0:
+            target_dim_ratio_scalar = target_dim_ratio.mean().item()
+        else:
+            target_dim_ratio_scalar = target_dim_ratio.item()
+
+        target_dim = int(self.min_dim + (self.max_dim - self.min_dim) * target_dim_ratio_scalar)
+        target_dim = max(self.min_dim, min(self.max_dim, target_dim))  # 确保在范围内
+
+        # 2. 首先投影到 max_dim
+        x_projected = self.initial_projection(x)
+
+        # 3. 生成可学习掩码
         mask = self.mask_generator(x)  # [batch_size, max_dim]
-        
-        # 3. 应用动态压缩
-        compressed_repr = x
+
+        # 4. 应用动态压缩
+        compressed_repr = x_projected
         for i, compression_layer in enumerate(self.compression_layers):
             if i < len(self.compression_layers) - 1:
                 compressed_repr = compression_layer(compressed_repr)
@@ -137,9 +150,9 @@ class AdaptiveRepresentationNetwork(nn.Module):
         
         # 6. 投影到目标维度
         adaptive_repr = self._project_to_target_dim(attended_repr, target_dim)
-        
-        # 7. 评估表征质量
-        quality_score = self.quality_assessor(adaptive_repr)
+
+        # 7. 评估表征质量（使用投影前的表征，因为 quality_assessor 期望 max_dim）
+        quality_score = self.quality_assessor(attended_repr)
         
         # 8. 收集适应信息
         adaptation_info = {

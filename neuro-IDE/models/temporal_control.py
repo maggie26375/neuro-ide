@@ -69,9 +69,9 @@ class TemporalControlLayer(nn.Module):
             nn.Softmax(dim=-1)
         )
         
-        # 状态预测器
+        # 状态预测器 - 修正输入维度：input_dim + input_dim + hidden_dim
         self.state_predictor = nn.Sequential(
-            nn.Linear(hidden_dim + intervention_dim, hidden_dim),
+            nn.Linear(input_dim + input_dim + hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, input_dim)
         )
@@ -185,14 +185,24 @@ class TemporalControlLayer(nn.Module):
         current_state: torch.Tensor
     ) -> torch.Tensor:
         """计算干预效果"""
-        # 基于干预类型和强度计算效果
+        # intervention_strength: [batch_size, intervention_dim]
+        # intervention_type: [batch_size, 5]
+        # current_state: [batch_size, input_dim]
+
+        # 组合干预强度和类型，投影到状态空间
+        # 使用平均池化将 intervention_strength 压缩
+        intervention_strength_avg = intervention_strength.mean(dim=1, keepdim=True)  # [batch_size, 1]
+
+        # 将类型和强度组合
+        combined_intervention = intervention_type * intervention_strength_avg  # [batch_size, 5]
+
+        # 投影到输入维度
         intervention_effect = torch.zeros_like(current_state)
-        
-        for i in range(intervention_strength.size(1)):
-            # 每种干预类型的效果
-            type_effect = intervention_type[:, i:i+1] * intervention_strength[:, i:i+1]
-            intervention_effect += type_effect * current_state
-        
+        if combined_intervention.size(1) > 0:
+            # 扩展到匹配 input_dim
+            intervention_scale = combined_intervention.sum(dim=1, keepdim=True)  # [batch_size, 1]
+            intervention_effect = current_state * intervention_scale  # 调制当前状态
+
         return intervention_effect
     
     def _predict_next_state(
