@@ -26,6 +26,8 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         ode_layers: int = 3,
         time_range: Tuple[float, float] = (0.0, 1.0),
         num_time_points: int = 10,
+        use_cell_attention: bool = True,
+        num_attention_heads: int = 8,
         **kwargs
     ):
         # 先调用父类初始化（会设置 self.state_dim）
@@ -36,15 +38,11 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         if self.use_neural_ode:
             # 父类初始化后，self.state_dim 已经被设置
             # SE 模型输出的是 state_dim，我们需要将其映射到 st_hidden_dim
-            print(f"DEBUG: self.state_dim = {self.state_dim}, self.st_hidden_dim = {self.st_hidden_dim}")
-
             # 如果 SE 输出维度与 ST 隐藏维度不同，添加映射层
             if self.state_dim != self.st_hidden_dim:
                 self.state_projection = nn.Linear(self.state_dim, self.st_hidden_dim)
-                print(f"DEBUG: Created projection layer: {self.state_dim} -> {self.st_hidden_dim}")
             else:
                 self.state_projection = nn.Identity()
-                print(f"DEBUG: Using Identity projection")
 
             # 替换 ST 模型为 Neural ODE 模型
             self.neural_ode_model = NeuralODEPerturbationModel(
@@ -54,7 +52,9 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
                 ode_hidden_dim=ode_hidden_dim,
                 ode_layers=ode_layers,
                 time_range=time_range,
-                num_time_points=num_time_points
+                num_time_points=num_time_points,
+                use_cell_attention=use_cell_attention,
+                num_attention_heads=num_attention_heads
             )
 
             # 禁用原有 ST 模型
@@ -63,43 +63,44 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
     def forward(self, batch: Dict[str, torch.Tensor], padded: bool = True) -> torch.Tensor:
         # 支持两种键名：ctrl_expressions 和 ctrl_cell_emb
         ctrl_expressions = batch.get("ctrl_expressions", batch.get("ctrl_cell_emb"))  # [B*S, N_genes]
-        pert_emb = batch["pert_emb"]                 # 可能是 [B, pert_dim] 或 [B*S, pert_dim]
+        pert_emb = batch["pert_emb"]                 # [B, pert_dim]
 
         # 1. SE Encoder: 基因表达 -> 状态嵌入
-        initial_states = self.encode_cells_to_state(ctrl_expressions)  # [B*S, se_output_dim]
+        initial_states_flat = self.encode_cells_to_state(ctrl_expressions)  # [B*S, se_output_dim]
 
         # 如果使用 Neural ODE，映射到 ST 隐藏维度
         if self.use_neural_ode:
-            initial_states = self.state_projection(initial_states)  # [B*S, st_hidden_dim]
+            initial_states_flat = self.state_projection(initial_states_flat)  # [B*S, st_hidden_dim]
 
-        # 处理扰动嵌入的维度
-        # 检查 pert_emb 是否已经扩展到与 ctrl_expressions 相同的批次大小
-        if pert_emb.shape[0] == initial_states.shape[0]:
-            # 已经扩展，直接使用
-            pert_emb_expanded = pert_emb
-        else:
-            # 需要扩展
-            batch_size = pert_emb.shape[0]
-            cell_sentence_len = initial_states.shape[0] // batch_size
+        # 处理 pert_emb 维度
+        if pert_emb.dim() == 1:
+            pert_emb = pert_emb.unsqueeze(0)  # [pert_dim] -> [1, pert_dim]
 
-            # 检查 pert_emb 的维度
-            if pert_emb.dim() == 1:
-                # [pert_dim] -> [1, pert_dim]
-                pert_emb = pert_emb.unsqueeze(0)
-
-            pert_emb_expanded = pert_emb.unsqueeze(1).repeat(1, cell_sentence_len, 1)
-            pert_emb_expanded = pert_emb_expanded.reshape(-1, self.pert_dim)
+        # 计算批次大小和序列长度
+        batch_size = pert_emb.shape[0]
+        cell_sentence_len = initial_states_flat.shape[0] // batch_size
 
         if self.use_neural_ode:
-            # 2. Neural ODE: 学习状态演化
+            # 2. Reshape 到 3D [batch, seq_len, state_dim]
+            # Neural ODE 现在支持 3D 输入，保留序列结构
+            initial_states_3d = initial_states_flat.reshape(batch_size, cell_sentence_len, self.st_hidden_dim)
+
+            # pert_emb 保持 2D [batch, pert_dim]
+            # Neural ODE 会在内部扩展到每个细胞
+
+            # 3. Neural ODE: 学习细胞群体的状态演化（支持细胞间交互）
             predictions = self.neural_ode_model(
-                initial_states,
-                pert_emb_expanded
-            )
+                initial_states_3d,      # [batch, seq_len, state_dim]
+                pert_emb                # [batch, pert_dim]
+            )  # 返回 [batch, seq_len, gene_dim]
+
+            # 4. Flatten 回 2D 以匹配后续处理
+            predictions = predictions.reshape(-1, self.output_dim)  # [B*S, gene_dim]
         else:
             # 使用原有 ST 模型
-            predictions = self.st_model(initial_states, pert_emb_expanded)
-        
+            pert_emb_expanded = pert_emb.unsqueeze(1).repeat(1, cell_sentence_len, 1).reshape(-1, self.pert_dim)
+            predictions = self.st_model(initial_states_flat, pert_emb_expanded)
+
         return predictions
     
     def get_perturbation_trajectory(
@@ -111,7 +112,7 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         获取扰动轨迹，用于分析细胞状态演化
 
         Returns:
-            trajectory: [num_time_points, batch_size, state_dim]
+            trajectory: [num_time_points, batch, seq_len, state_dim]
         """
         if not self.use_neural_ode:
             raise ValueError("Neural ODE not enabled")
@@ -120,34 +121,28 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         ctrl_expressions = batch.get("ctrl_expressions", batch.get("ctrl_cell_emb"))
         pert_emb = batch["pert_emb"]
 
-        initial_states = self.encode_cells_to_state(ctrl_expressions)
+        # SE Encoder
+        initial_states_flat = self.encode_cells_to_state(ctrl_expressions)
+        initial_states_flat = self.state_projection(initial_states_flat)
 
-        # 映射到 ST 隐藏维度
-        initial_states = self.state_projection(initial_states)
+        # 处理 pert_emb 维度
+        if pert_emb.dim() == 1:
+            pert_emb = pert_emb.unsqueeze(0)
 
-        # 处理扰动嵌入
-        if pert_emb.shape[0] == initial_states.shape[0]:
-            # 已经扩展，直接使用
-            pert_emb_expanded = pert_emb
-        else:
-            # 需要扩展
-            batch_size = pert_emb.shape[0]
-            cell_sentence_len = initial_states.shape[0] // batch_size
+        # 计算批次大小和序列长度
+        batch_size = pert_emb.shape[0]
+        cell_sentence_len = initial_states_flat.shape[0] // batch_size
 
-            # 检查 pert_emb 的维度
-            if pert_emb.dim() == 1:
-                pert_emb = pert_emb.unsqueeze(0)
-
-            pert_emb_expanded = pert_emb.unsqueeze(1).repeat(1, cell_sentence_len, 1)
-            pert_emb_expanded = pert_emb_expanded.reshape(-1, self.pert_dim)
+        # Reshape 到 3D
+        initial_states_3d = initial_states_flat.reshape(batch_size, cell_sentence_len, self.st_hidden_dim)
 
         # 获取完整轨迹
         trajectory = self.neural_ode_model(
-            initial_states,
-            pert_emb_expanded,
+            initial_states_3d,
+            pert_emb,
             return_trajectory=True
         )
-        
+
         return trajectory
     
     def get_velocity_field(

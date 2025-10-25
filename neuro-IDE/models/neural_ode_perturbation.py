@@ -15,39 +15,54 @@ import math
 class PerturbationODEFunc(nn.Module):
     """
     扰动动力学函数：dX/dt = f(X, P, t)
-    
+
     核心思想：
-    - X: 细胞状态嵌入 (来自 SE Encoder)
-    - P: 扰动嵌入 (来自 ESM2)
+    - X: 细胞状态嵌入 [batch, seq_len, state_dim] (来自 SE Encoder)
+    - P: 扰动嵌入 [batch, pert_dim] (来自 ESM2)
     - t: 虚拟时间 (扰动作用强度)
     - f: 学习的速度场，描述状态如何演化
+
+    支持 3D 输入，保留序列结构，可以建模同一 perturbation 下细胞间的交互
     """
-    
+
     def __init__(
-        self, 
-        state_dim: int, 
-        pert_dim: int, 
+        self,
+        state_dim: int,
+        pert_dim: int,
         hidden_dim: int = 128,
-        num_layers: int = 3
+        num_layers: int = 3,
+        use_cell_attention: bool = True,
+        num_attention_heads: int = 8
     ):
         super().__init__()
         self.state_dim = state_dim
         self.pert_dim = pert_dim
-        
+        self.use_cell_attention = use_cell_attention
+
+        # 细胞间注意力机制 - 让同一 perturbation 下的细胞可以交互
+        if use_cell_attention:
+            self.cell_attention = nn.MultiheadAttention(
+                embed_dim=state_dim,
+                num_heads=num_attention_heads,
+                dropout=0.1,
+                batch_first=True
+            )
+            self.attention_norm = nn.LayerNorm(state_dim)
+
         # 构建网络：输入 [X, P, t] -> 输出 dX/dt
         layers = []
         input_dim = state_dim + pert_dim + 1  # +1 for time t
-        
+
         for i in range(num_layers):
             if i == 0:
                 layers.append(nn.Linear(input_dim, hidden_dim))
             else:
                 layers.append(nn.Linear(hidden_dim, hidden_dim))
             layers.append(nn.Tanh())
-        
+
         layers.append(nn.Linear(hidden_dim, state_dim))
         self.net = nn.Sequential(*layers)
-        
+
         # 可学习的扰动强度调制器
         self.perturbation_modulator = nn.Sequential(
             nn.Linear(pert_dim, hidden_dim // 2),
@@ -60,69 +75,60 @@ class PerturbationODEFunc(nn.Module):
         """
         Args:
             t: 时间标量或张量
-            x: 当前状态 [batch_size, state_dim]
-            pert_emb: 扰动嵌入 [batch_size, pert_dim]
+            x: 当前状态 [batch, seq_len, state_dim] (3D 输入，保留序列结构)
+            pert_emb: 扰动嵌入 [batch, pert_dim] (2D 输入)
 
         Returns:
-            dx/dt: 状态变化速度 [batch_size, state_dim]
+            dx/dt: 状态变化速度 [batch, seq_len, state_dim] (3D 输出)
         """
-        # 确保所有张量都是 2D [batch_size, dim]
-        if x.dim() == 3:
-            # 如果 x 是 3D，reshape 到 2D
-            x = x.reshape(-1, x.shape[-1])
+        # 支持 3D 输入 [batch, seq_len, state_dim]
+        if x.dim() != 3:
+            raise ValueError(f"Expected 3D input [batch, seq_len, state_dim], got {x.shape}")
 
-        if pert_emb.dim() == 3:
-            # 如果 pert_emb 是 3D，reshape 到 2D
-            pert_emb = pert_emb.reshape(-1, pert_emb.shape[-1])
+        batch_size, seq_len, state_dim = x.shape
 
-        # 获取正确的批次大小（在 reshape 之后）
-        batch_size = x.shape[0]
+        # 确保 pert_emb 是 2D [batch, pert_dim]
+        if pert_emb.dim() == 1:
+            pert_emb = pert_emb.unsqueeze(0)  # [pert_dim] -> [1, pert_dim]
 
-        # 确保 pert_emb 的批次大小与 x 匹配，并且维度正确
-        if pert_emb.shape[0] != batch_size:
-            # 如果批次大小不匹配，需要扩展 pert_emb
-            # 但首先确保 pert_emb 的最后一维是 pert_dim
-            if pert_emb.shape[-1] != self.pert_dim:
-                # pert_emb 维度不对，可能是多个 pert_emb 拼接在一起
-                # 只取前 pert_dim 维
-                pert_emb = pert_emb[:, :self.pert_dim]
-            pert_emb = pert_emb.expand(batch_size, -1)
-        elif pert_emb.shape[-1] != self.pert_dim:
-            # 批次大小匹配，但维度不对
+        # 如果 pert_emb 维度不对，截取正确的维度
+        if pert_emb.shape[-1] != self.pert_dim:
             pert_emb = pert_emb[:, :self.pert_dim]
 
-        # 处理时间维度（在确定最终 batch_size 之后）
+        # 确保 pert_emb 的 batch 维度匹配
+        if pert_emb.shape[0] == 1 and batch_size > 1:
+            pert_emb = pert_emb.expand(batch_size, -1)
+        elif pert_emb.shape[0] != batch_size:
+            raise ValueError(f"Batch size mismatch: x={batch_size}, pert_emb={pert_emb.shape[0]}")
+
+        # 1. 细胞间注意力 - 让同一 perturbation 下的细胞可以交互
+        if self.use_cell_attention:
+            # Self-attention within each perturbation's cell population
+            x_attended, _ = self.cell_attention(x, x, x)
+            # Residual connection + layer norm
+            x = self.attention_norm(x + x_attended)
+
+        # 2. 扩展 pert_emb 到每个细胞 [batch, pert_dim] -> [batch, seq_len, pert_dim]
+        pert_emb_expanded = pert_emb.unsqueeze(1).expand(-1, seq_len, -1)
+
+        # 3. 处理时间维度
         if t.dim() == 0:  # 标量时间
-            t_expanded = t.expand(batch_size, 1)
-        else:  # 向量时间
-            t_expanded = t.unsqueeze(-1) if t.dim() == 1 else t
-            # 确保 t_expanded 的批次大小也匹配
-            if t_expanded.shape[0] != batch_size:
-                t_expanded = t_expanded.expand(batch_size, -1)
+            t_expanded = t.expand(batch_size, seq_len, 1)
+        else:
+            raise NotImplementedError("Only scalar time is supported in 3D mode")
 
-        # 拼接输入：[X, P, t]
-        print(f"DEBUG ODE forward:")
-        print(f"  x.shape: {x.shape}")
-        print(f"  pert_emb.shape: {pert_emb.shape}")
-        print(f"  t_expanded.shape: {t_expanded.shape}")
-        print(f"  self.state_dim: {self.state_dim}")
-        print(f"  self.pert_dim: {self.pert_dim}")
+        # 4. 拼接输入：[X, P, t] -> [batch, seq_len, state_dim + pert_dim + 1]
+        input_features = torch.cat([x, pert_emb_expanded, t_expanded], dim=-1)
 
-        input_features = torch.cat([x, pert_emb, t_expanded], dim=-1)
-        print(f"  input_features.shape: {input_features.shape}")
-        print(f"  Expected input_dim: {self.state_dim + self.pert_dim + 1}")
+        # 5. 计算基础速度场
+        base_velocity = self.net(input_features)  # [batch, seq_len, state_dim]
 
-        # 计算基础速度场
-        base_velocity = self.net(input_features)
-        print(f"  base_velocity.shape: {base_velocity.shape}")
+        # 6. 扰动强度调制（对每个细胞应用相同的扰动强度）
+        perturbation_strength = self.perturbation_modulator(pert_emb)  # [batch, 1]
+        perturbation_strength = perturbation_strength.unsqueeze(1)  # [batch, 1, 1]
 
-        # 扰动强度调制
-        perturbation_strength = self.perturbation_modulator(pert_emb)
-        print(f"  perturbation_strength.shape: {perturbation_strength.shape}")
-
-        modulated_velocity = base_velocity * perturbation_strength
-        print(f"  modulated_velocity.shape: {modulated_velocity.shape}")
-        print(f"  Expected output shape: [{batch_size}, {self.state_dim}]")
+        # 7. 调制速度场
+        modulated_velocity = base_velocity * perturbation_strength  # [batch, seq_len, state_dim]
 
         return modulated_velocity
 
@@ -145,19 +151,23 @@ class NeuralODEPerturbationModel(nn.Module):
         ode_hidden_dim: int = 128,
         ode_layers: int = 3,
         time_range: Tuple[float, float] = (0.0, 1.0),
-        num_time_points: int = 10
+        num_time_points: int = 10,
+        use_cell_attention: bool = True,
+        num_attention_heads: int = 8
     ):
         super().__init__()
         self.state_dim = state_dim
         self.pert_dim = pert_dim
         self.gene_dim = gene_dim
-        
+
         # Neural ODE 函数
         self.ode_func = PerturbationODEFunc(
             state_dim=state_dim,
             pert_dim=pert_dim,
             hidden_dim=ode_hidden_dim,
-            num_layers=ode_layers
+            num_layers=ode_layers,
+            use_cell_attention=use_cell_attention,
+            num_attention_heads=num_attention_heads
         )
         
         # 时间范围
@@ -191,21 +201,23 @@ class NeuralODEPerturbationModel(nn.Module):
     ) -> torch.Tensor:
         """
         Args:
-            initial_states: 初始状态 [batch_size, state_dim]
-            perturbation_emb: 扰动嵌入 [batch_size, pert_dim]
+            initial_states: 初始状态 [batch, seq_len, state_dim] (3D 输入，保留细胞序列结构)
+            perturbation_emb: 扰动嵌入 [batch, pert_dim] (2D 输入)
             return_trajectory: 是否返回完整轨迹
 
         Returns:
-            predicted_expressions: 预测基因表达 [batch_size, gene_dim]
-            或 trajectory: 完整状态轨迹 [time_points, batch_size, state_dim]
+            predicted_expressions: 预测基因表达 [batch, seq_len, gene_dim]
+            或 trajectory: 完整状态轨迹 [time_points, batch, seq_len, state_dim]
         """
-        batch_size = initial_states.shape[0]
+        if initial_states.dim() != 3:
+            raise ValueError(f"Expected 3D initial_states [batch, seq_len, state_dim], got {initial_states.shape}")
+
+        batch_size, seq_len, state_dim = initial_states.shape
         device = initial_states.device
 
-        print(f"DEBUG NeuralODE forward:")
-        print(f"  initial_states.shape: {initial_states.shape}")
-        print(f"  perturbation_emb.shape: {perturbation_emb.shape}")
-        print(f"  Expected: initial_states=[{batch_size}, {self.state_dim}]")
+        # 确保 perturbation_emb 是 2D
+        if perturbation_emb.dim() == 1:
+            perturbation_emb = perturbation_emb.unsqueeze(0)
 
         # 将时间点移到设备上
         time_points = self.time_points.to(device)
@@ -218,13 +230,13 @@ class NeuralODEPerturbationModel(nn.Module):
                 self.pert_emb = pert_emb
 
             def forward(self, t, x):
-                print(f"  ODEWrapper called: t={t.item() if t.dim()==0 else t.shape}, x.shape={x.shape}")
                 return self.ode_func(t, x, self.pert_emb)
 
         ode_wrapper = ODEWrapper(self.ode_func, perturbation_emb)
 
         # 求解 Neural ODE
-        # 使用 odeint_adjoint 自动使用 adjoint 方法进行反向传播
+        # 输入: [batch, seq_len, state_dim]
+        # 输出: [time_points, batch, seq_len, state_dim]
         trajectory = odeint(
             ode_wrapper,
             initial_states,
@@ -233,16 +245,19 @@ class NeuralODEPerturbationModel(nn.Module):
             atol=1e-4,
             method='dopri5'  # 推荐的高精度求解器
         )
-        
+
         if return_trajectory:
             return trajectory
-        
+
         # 取最终时间点的状态
-        final_states = trajectory[-1]  # [batch_size, state_dim]
-        
+        final_states = trajectory[-1]  # [batch, seq_len, state_dim]
+
         # 解码为基因表达
-        predicted_expressions = self.gene_decoder(final_states)
-        
+        # 需要 reshape 来批量处理所有细胞
+        final_states_flat = final_states.reshape(-1, state_dim)  # [batch*seq_len, state_dim]
+        predicted_expressions_flat = self.gene_decoder(final_states_flat)  # [batch*seq_len, gene_dim]
+        predicted_expressions = predicted_expressions_flat.reshape(batch_size, seq_len, self.gene_dim)
+
         return predicted_expressions
     
     def get_velocity_field(

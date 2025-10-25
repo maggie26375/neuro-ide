@@ -25,6 +25,8 @@ model:
   ode_layers: 3
   time_range: [0.0, 1.0]
   num_time_points: 10
+  use_cell_attention: true  # 是否使用细胞间注意力机制
+  num_attention_heads: 8     # 注意力头数
   
   # 训练参数
   lr: 1e-4
