@@ -114,11 +114,16 @@ class PerturbationODEFunc(nn.Module):
 
         # 计算基础速度场
         base_velocity = self.net(input_features)
-        
+        print(f"  base_velocity.shape: {base_velocity.shape}")
+
         # 扰动强度调制
         perturbation_strength = self.perturbation_modulator(pert_emb)
+        print(f"  perturbation_strength.shape: {perturbation_strength.shape}")
+
         modulated_velocity = base_velocity * perturbation_strength
-        
+        print(f"  modulated_velocity.shape: {modulated_velocity.shape}")
+        print(f"  Expected output shape: [{batch_size}, {self.state_dim}]")
+
         return modulated_velocity
 
 
