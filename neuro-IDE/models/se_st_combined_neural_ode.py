@@ -51,17 +51,28 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
     def forward(self, batch: Dict[str, torch.Tensor], padded: bool = True) -> torch.Tensor:
         # 支持两种键名：ctrl_expressions 和 ctrl_cell_emb
         ctrl_expressions = batch.get("ctrl_expressions", batch.get("ctrl_cell_emb"))  # [B*S, N_genes]
-        pert_emb = batch["pert_emb"]                 # [B, pert_dim]
+        pert_emb = batch["pert_emb"]                 # 可能是 [B, pert_dim] 或 [B*S, pert_dim]
 
         # 1. SE Encoder: 基因表达 -> 状态嵌入
         initial_states = self.encode_cells_to_state(ctrl_expressions)  # [B*S, state_dim]
-        
+
         # 处理扰动嵌入的维度
-        batch_size = pert_emb.shape[0]
-        cell_sentence_len = initial_states.shape[0] // batch_size
-        
-        pert_emb_expanded = pert_emb.unsqueeze(1).repeat(1, cell_sentence_len, 1)
-        pert_emb_expanded = pert_emb_expanded.reshape(-1, self.pert_dim)
+        # 检查 pert_emb 是否已经扩展到与 ctrl_expressions 相同的批次大小
+        if pert_emb.shape[0] == initial_states.shape[0]:
+            # 已经扩展，直接使用
+            pert_emb_expanded = pert_emb
+        else:
+            # 需要扩展
+            batch_size = pert_emb.shape[0]
+            cell_sentence_len = initial_states.shape[0] // batch_size
+
+            # 检查 pert_emb 的维度
+            if pert_emb.dim() == 1:
+                # [pert_dim] -> [1, pert_dim]
+                pert_emb = pert_emb.unsqueeze(0)
+
+            pert_emb_expanded = pert_emb.unsqueeze(1).repeat(1, cell_sentence_len, 1)
+            pert_emb_expanded = pert_emb_expanded.reshape(-1, self.pert_dim)
         
         if self.use_neural_ode:
             # 2. Neural ODE: 学习状态演化
@@ -94,12 +105,22 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         pert_emb = batch["pert_emb"]
 
         initial_states = self.encode_cells_to_state(ctrl_expressions)
-        
+
         # 处理扰动嵌入
-        batch_size = pert_emb.shape[0]
-        cell_sentence_len = initial_states.shape[0] // batch_size
-        pert_emb_expanded = pert_emb.unsqueeze(1).repeat(1, cell_sentence_len, 1)
-        pert_emb_expanded = pert_emb_expanded.reshape(-1, self.pert_dim)
+        if pert_emb.shape[0] == initial_states.shape[0]:
+            # 已经扩展，直接使用
+            pert_emb_expanded = pert_emb
+        else:
+            # 需要扩展
+            batch_size = pert_emb.shape[0]
+            cell_sentence_len = initial_states.shape[0] // batch_size
+
+            # 检查 pert_emb 的维度
+            if pert_emb.dim() == 1:
+                pert_emb = pert_emb.unsqueeze(0)
+
+            pert_emb_expanded = pert_emb.unsqueeze(1).repeat(1, cell_sentence_len, 1)
+            pert_emb_expanded = pert_emb_expanded.reshape(-1, self.pert_dim)
         
         # 获取完整轨迹
         trajectory = self.neural_ode_model(
