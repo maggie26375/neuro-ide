@@ -113,7 +113,8 @@ class PerturbationODEFunc(nn.Module):
 
         # 3. 处理时间维度
         if t.dim() == 0:  # 标量时间
-            t_expanded = t.expand(batch_size, seq_len, 1)
+            # 创建一个 [batch, seq_len, 1] 的张量，所有值都是 t
+            t_expanded = torch.full((batch_size, seq_len, 1), t.item(), device=x.device, dtype=x.dtype)
         else:
             raise NotImplementedError("Only scalar time is supported in 3D mode")
 
