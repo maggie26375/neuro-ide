@@ -73,11 +73,25 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
             initial_states_flat = self.state_projection(initial_states_flat)  # [B*S, st_hidden_dim]
 
         # 处理 pert_emb 维度
-        if pert_emb.dim() == 1:
+        # 检查 pert_emb 是否已经被扩展成 [B*S, pert_dim]
+        if pert_emb.shape[0] == initial_states_flat.shape[0]:
+            # pert_emb 已经被扩展了，需要恢复到 [B, pert_dim]
+            # 使用 st_cell_set_len 来确定真实的 batch_size
+            if padded:
+                batch_size = initial_states_flat.shape[0] // self.st_cell_set_len
+                # 每隔 st_cell_set_len 取一个 perturbation（它们应该是重复的）
+                pert_emb = pert_emb[::self.st_cell_set_len]  # [B*S, pert_dim] -> [B, pert_dim]
+            else:
+                # 如果不是 padded，假设所有细胞共享同一个 perturbation
+                batch_size = 1
+                pert_emb = pert_emb[0:1]
+        elif pert_emb.dim() == 1:
             pert_emb = pert_emb.unsqueeze(0)  # [pert_dim] -> [1, pert_dim]
+            batch_size = 1
+        else:
+            # pert_emb 是正确的 [B, pert_dim] 形状
+            batch_size = pert_emb.shape[0]
 
-        # 计算批次大小和序列长度
-        batch_size = pert_emb.shape[0]
         cell_sentence_len = initial_states_flat.shape[0] // batch_size
 
         if self.use_neural_ode:
@@ -125,12 +139,17 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         initial_states_flat = self.encode_cells_to_state(ctrl_expressions)
         initial_states_flat = self.state_projection(initial_states_flat)
 
-        # 处理 pert_emb 维度
-        if pert_emb.dim() == 1:
+        # 处理 pert_emb 维度（与 forward 方法相同的逻辑）
+        if pert_emb.shape[0] == initial_states_flat.shape[0]:
+            # pert_emb 已经被扩展了，需要恢复到 [B, pert_dim]
+            batch_size = initial_states_flat.shape[0] // self.st_cell_set_len
+            pert_emb = pert_emb[::self.st_cell_set_len]
+        elif pert_emb.dim() == 1:
             pert_emb = pert_emb.unsqueeze(0)
+            batch_size = 1
+        else:
+            batch_size = pert_emb.shape[0]
 
-        # 计算批次大小和序列长度
-        batch_size = pert_emb.shape[0]
         cell_sentence_len = initial_states_flat.shape[0] // batch_size
 
         # Reshape 到 3D
