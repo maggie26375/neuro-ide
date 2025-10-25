@@ -93,8 +93,17 @@ class PerturbationODEFunc(nn.Module):
                 t_expanded = t_expanded.expand(batch_size, -1)
 
         # 拼接输入：[X, P, t]
+        print(f"DEBUG ODE forward:")
+        print(f"  x.shape: {x.shape}")
+        print(f"  pert_emb.shape: {pert_emb.shape}")
+        print(f"  t_expanded.shape: {t_expanded.shape}")
+        print(f"  self.state_dim: {self.state_dim}")
+        print(f"  self.pert_dim: {self.pert_dim}")
+
         input_features = torch.cat([x, pert_emb, t_expanded], dim=-1)
-        
+        print(f"  input_features.shape: {input_features.shape}")
+        print(f"  Expected input_dim: {self.state_dim + self.pert_dim + 1}")
+
         # 计算基础速度场
         base_velocity = self.net(input_features)
         
