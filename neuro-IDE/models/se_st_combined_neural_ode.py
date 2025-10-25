@@ -72,6 +72,14 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         if self.use_neural_ode:
             initial_states_flat = self.state_projection(initial_states_flat)  # [B*S, st_hidden_dim]
 
+        # DEBUG: 打印实际的形状
+        print(f"\nDEBUG forward:")
+        print(f"  ctrl_expressions.shape: {ctrl_expressions.shape}")
+        print(f"  initial_states_flat.shape: {initial_states_flat.shape}")
+        print(f"  pert_emb.shape: {pert_emb.shape}")
+        print(f"  padded: {padded}")
+        print(f"  st_cell_set_len: {self.st_cell_set_len}")
+
         # 处理 pert_emb 维度
         # 检查 pert_emb 是否已经被扩展成 [B*S, pert_dim]
         if pert_emb.shape[0] == initial_states_flat.shape[0]:
