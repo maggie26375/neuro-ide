@@ -224,21 +224,35 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         """训练步骤，支持 Neural ODE"""
         predictions = self.forward(batch, padded=padded)
         target = batch["pert_cell_emb"]
-        
-        if padded:
-            predictions = predictions.reshape(-1, self.st_cell_set_len, self.output_dim)
-            target = target.reshape(-1, self.st_cell_set_len, self.output_dim)
+
+        # 获取target的实际形状来确定如何reshape
+        if target.dim() == 3:
+            # Target是3D [B, S, dim]，predictions应该也是对应的形状
+            batch_size, seq_len, _ = target.shape
+            predictions = predictions.reshape(batch_size, seq_len, self.output_dim)
+        elif padded:
+            # Target是2D，尝试reshape
+            total_cells = predictions.shape[0]
+            batch_size = total_cells // self.st_cell_set_len
+            if total_cells % self.st_cell_set_len != 0:
+                # 不能整除，说明batch大小不对
+                # 直接使用实际的维度
+                predictions = predictions.reshape(1, -1, self.output_dim)
+                target = target.reshape(1, -1, self.output_dim)
+            else:
+                predictions = predictions.reshape(batch_size, self.st_cell_set_len, self.output_dim)
+                target = target.reshape(batch_size, self.st_cell_set_len, self.output_dim)
         else:
             predictions = predictions.reshape(1, -1, self.output_dim)
             target = target.reshape(1, -1, self.output_dim)
-        
+
         if self.use_neural_ode:
             # 使用 Neural ODE 的损失函数
             loss = torch.nn.functional.mse_loss(predictions, target)
         else:
             # 使用原有 ST 模型的损失函数
             loss = self.st_model.loss_fn(predictions, target).nanmean()
-        
+
         self.log("train_loss", loss)
         return loss
     
@@ -247,9 +261,23 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         predictions = self.forward(batch, padded=padded)
         target = batch["pert_cell_emb"]
 
-        if padded:
-            predictions = predictions.reshape(-1, self.st_cell_set_len, self.output_dim)
-            target = target.reshape(-1, self.st_cell_set_len, self.output_dim)
+        # 获取target的实际形状来确定如何reshape
+        if target.dim() == 3:
+            # Target是3D [B, S, dim]，predictions应该也是对应的形状
+            batch_size, seq_len, _ = target.shape
+            predictions = predictions.reshape(batch_size, seq_len, self.output_dim)
+        elif padded:
+            # Target是2D，尝试reshape
+            total_cells = predictions.shape[0]
+            batch_size = total_cells // self.st_cell_set_len
+            if total_cells % self.st_cell_set_len != 0:
+                # 不能整除，说明batch大小不对
+                # 直接使用实际的维度
+                predictions = predictions.reshape(1, -1, self.output_dim)
+                target = target.reshape(1, -1, self.output_dim)
+            else:
+                predictions = predictions.reshape(batch_size, self.st_cell_set_len, self.output_dim)
+                target = target.reshape(batch_size, self.st_cell_set_len, self.output_dim)
         else:
             predictions = predictions.reshape(1, -1, self.output_dim)
             target = target.reshape(1, -1, self.output_dim)
