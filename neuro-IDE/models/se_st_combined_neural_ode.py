@@ -78,15 +78,16 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
             # pert_emb 已经被扩展了，需要恢复到 [B, pert_dim]
             # 使用 st_cell_set_len 来确定真实的 batch_size
             if padded:
-                batch_size = initial_states_flat.shape[0] // self.st_cell_set_len
-                if batch_size == 0:
-                    raise ValueError(
-                        f"Invalid batch_size=0. "
-                        f"initial_states_flat.shape[0]={initial_states_flat.shape[0]}, "
-                        f"st_cell_set_len={self.st_cell_set_len}"
-                    )
-                # 每隔 st_cell_set_len 取一个 perturbation（它们应该是重复的）
-                pert_emb = pert_emb[::self.st_cell_set_len]  # [B*S, pert_dim] -> [B, pert_dim]
+                # 检查是否样本数小于 st_cell_set_len（验证集可能较小）
+                if initial_states_flat.shape[0] < self.st_cell_set_len:
+                    # 样本数小于 st_cell_set_len，说明这是一个小批次
+                    # 此时所有细胞可能共享同一个 perturbation
+                    batch_size = 1
+                    pert_emb = pert_emb[0:1]
+                else:
+                    batch_size = initial_states_flat.shape[0] // self.st_cell_set_len
+                    # 每隔 st_cell_set_len 取一个 perturbation（它们应该是重复的）
+                    pert_emb = pert_emb[::self.st_cell_set_len]  # [B*S, pert_dim] -> [B, pert_dim]
             else:
                 # 如果不是 padded，假设所有细胞共享同一个 perturbation
                 batch_size = 1
@@ -97,15 +98,6 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         else:
             # pert_emb 是正确的 [B, pert_dim] 形状
             batch_size = pert_emb.shape[0]
-            if batch_size == 0:
-                raise ValueError(f"pert_emb has batch_size=0: shape={pert_emb.shape}")
-
-        if batch_size == 0:
-            raise ValueError(
-                f"batch_size is 0. pert_emb.shape={pert_emb.shape}, "
-                f"initial_states_flat.shape={initial_states_flat.shape}, "
-                f"padded={padded}"
-            )
 
         cell_sentence_len = initial_states_flat.shape[0] // batch_size
 
@@ -157,8 +149,12 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         # 处理 pert_emb 维度（与 forward 方法相同的逻辑）
         if pert_emb.shape[0] == initial_states_flat.shape[0]:
             # pert_emb 已经被扩展了，需要恢复到 [B, pert_dim]
-            batch_size = initial_states_flat.shape[0] // self.st_cell_set_len
-            pert_emb = pert_emb[::self.st_cell_set_len]
+            if initial_states_flat.shape[0] < self.st_cell_set_len:
+                batch_size = 1
+                pert_emb = pert_emb[0:1]
+            else:
+                batch_size = initial_states_flat.shape[0] // self.st_cell_set_len
+                pert_emb = pert_emb[::self.st_cell_set_len]
         elif pert_emb.dim() == 1:
             pert_emb = pert_emb.unsqueeze(0)
             batch_size = 1
