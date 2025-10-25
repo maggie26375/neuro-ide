@@ -334,14 +334,16 @@ class PerturbationDataset(Dataset):
         # Get zeroshot configuration
         zeroshot_config = self.config.get("zeroshot", {})
         
-        # Build a map of cell type to split
+        # Build a map of cell type to split (case-insensitive)
         celltype_splits = {}
+        celltype_splits_lower = {}  # lowercase version for case-insensitive matching
         for key, split_val in zeroshot_config.items():
             # key format: "dataset_name.celltype"
             if "." in key:
                 parts = key.split(".", 1)
                 if parts[0] == dataset_name:
                     celltype_splits[parts[1]] = split_val
+                    celltype_splits_lower[parts[1].lower()] = split_val
         
         logger.info(f"Zeroshot cell type splits: {celltype_splits}")
         logger.info(f"🎯 Current dataset split: {self.split}")
@@ -359,7 +361,11 @@ class PerturbationDataset(Dataset):
             for (p, batch, ct), indices in cells_by_pert_batch.items():
                 if p == pert_name:
                     # Check if this cell type should be included in current split
-                    ct_split = celltype_splits.get(ct, "train")  # default to train
+                    # Try exact match first, then case-insensitive
+                    ct_split = celltype_splits.get(ct)
+                    if ct_split is None:
+                        ct_split = celltype_splits_lower.get(ct.lower(), "train")  # default to train
+
                     if ct_split == self.split:
                         all_pert_cells.extend([(idx, batch, ct) for idx in indices])
                     else:
@@ -383,8 +389,10 @@ class PerturbationDataset(Dataset):
             
             # Try to create a sentence from cells with the same batch/cell type
             for (batch_name, cell_type), pert_indices in pert_cells_by_context.items():
-                # Check split
-                ct_split = celltype_splits.get(cell_type, "train")
+                # Check split (case-insensitive)
+                ct_split = celltype_splits.get(cell_type)
+                if ct_split is None:
+                    ct_split = celltype_splits_lower.get(cell_type.lower(), "train")
                 if ct_split != self.split:
                     continue
                 
