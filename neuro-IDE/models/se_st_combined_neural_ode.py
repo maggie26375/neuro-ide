@@ -79,6 +79,12 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
             # 使用 st_cell_set_len 来确定真实的 batch_size
             if padded:
                 batch_size = initial_states_flat.shape[0] // self.st_cell_set_len
+                if batch_size == 0:
+                    raise ValueError(
+                        f"Invalid batch_size=0. "
+                        f"initial_states_flat.shape[0]={initial_states_flat.shape[0]}, "
+                        f"st_cell_set_len={self.st_cell_set_len}"
+                    )
                 # 每隔 st_cell_set_len 取一个 perturbation（它们应该是重复的）
                 pert_emb = pert_emb[::self.st_cell_set_len]  # [B*S, pert_dim] -> [B, pert_dim]
             else:
@@ -91,6 +97,15 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         else:
             # pert_emb 是正确的 [B, pert_dim] 形状
             batch_size = pert_emb.shape[0]
+            if batch_size == 0:
+                raise ValueError(f"pert_emb has batch_size=0: shape={pert_emb.shape}")
+
+        if batch_size == 0:
+            raise ValueError(
+                f"batch_size is 0. pert_emb.shape={pert_emb.shape}, "
+                f"initial_states_flat.shape={initial_states_flat.shape}, "
+                f"padded={padded}"
+            )
 
         cell_sentence_len = initial_states_flat.shape[0] // batch_size
 
