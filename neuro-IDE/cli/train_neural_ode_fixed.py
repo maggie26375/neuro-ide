@@ -6,9 +6,14 @@ This script provides training functionality for the integrated Neural ODE system
 
 import torch
 import torch.nn as nn
-from lightning.pytorch import Trainer
-from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
-from lightning.pytorch.loggers import TensorBoardLogger
+try:
+    from lightning.pytorch import Trainer
+    from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
+    from lightning.pytorch.loggers import TensorBoardLogger
+except ImportError:
+    from pytorch_lightning import Trainer
+    from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
+    from pytorch_lightning.loggers import TensorBoardLogger
 import hydra
 from omegaconf import DictConfig
 import logging
@@ -17,7 +22,7 @@ import sys
 import os
 
 # Add the parent directory to the path to fix imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.se_st_combined_neural_ode import SE_ST_NeuralODE_Model
 from se_st_combined.cli.train import SE_ST_DataModule
