@@ -66,28 +66,31 @@ class PerturbationODEFunc(nn.Module):
         Returns:
             dx/dt: 状态变化速度 [batch_size, state_dim]
         """
-        batch_size = x.shape[0]
-
-        # 处理时间维度
-        if t.dim() == 0:  # 标量时间
-            t_expanded = t.expand(batch_size, 1)
-        else:  # 向量时间
-            t_expanded = t.unsqueeze(-1) if t.dim() == 1 else t
-
         # 确保所有张量都是 2D [batch_size, dim]
         if x.dim() == 3:
             # 如果 x 是 3D，reshape 到 2D
             x = x.reshape(-1, x.shape[-1])
-            batch_size = x.shape[0]  # 更新 batch_size
 
         if pert_emb.dim() == 3:
             # 如果 pert_emb 是 3D，reshape 到 2D
             pert_emb = pert_emb.reshape(-1, pert_emb.shape[-1])
 
+        # 获取正确的批次大小（在 reshape 之后）
+        batch_size = x.shape[0]
+
         # 确保 pert_emb 的批次大小与 x 匹配
         if pert_emb.shape[0] != batch_size:
             # 如果批次大小不匹配，扩展 pert_emb
             pert_emb = pert_emb.expand(batch_size, -1)
+
+        # 处理时间维度（在确定最终 batch_size 之后）
+        if t.dim() == 0:  # 标量时间
+            t_expanded = t.expand(batch_size, 1)
+        else:  # 向量时间
+            t_expanded = t.unsqueeze(-1) if t.dim() == 1 else t
+            # 确保 t_expanded 的批次大小也匹配
+            if t_expanded.shape[0] != batch_size:
+                t_expanded = t_expanded.expand(batch_size, -1)
 
         # 拼接输入：[X, P, t]
         input_features = torch.cat([x, pert_emb, t_expanded], dim=-1)
