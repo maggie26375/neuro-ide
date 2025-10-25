@@ -166,20 +166,36 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         """验证步骤，支持 Neural ODE"""
         predictions = self.forward(batch, padded=padded)
         target = batch["pert_cell_emb"]
-        
+
         if padded:
             predictions = predictions.reshape(-1, self.st_cell_set_len, self.output_dim)
             target = target.reshape(-1, self.st_cell_set_len, self.output_dim)
         else:
             predictions = predictions.reshape(1, -1, self.output_dim)
             target = target.reshape(1, -1, self.output_dim)
-        
+
         if self.use_neural_ode:
             # 使用 Neural ODE 的损失函数
             loss = torch.nn.functional.mse_loss(predictions, target)
         else:
             # 使用原有 ST 模型的损失函数
             loss = self.st_model.loss_fn(predictions, target).nanmean()
-        
+
         self.log("val_loss", loss)
         return loss
+
+    def configure_optimizers(self):
+        """配置优化器，支持 Neural ODE"""
+        if self.use_neural_ode:
+            # 如果使用 Neural ODE
+            if self.freeze_se_model:
+                # 只优化 Neural ODE 模型参数
+                optimizer = torch.optim.Adam(self.neural_ode_model.parameters(), lr=self.lr)
+            else:
+                # 优化整个模型（包括 SE 模型）
+                optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        else:
+            # 如果不使用 Neural ODE，调用父类方法
+            optimizer = super().configure_optimizers()
+
+        return optimizer
