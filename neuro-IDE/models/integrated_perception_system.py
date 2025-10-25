@@ -57,12 +57,17 @@ class IntegratedPerceptionSystem(nn.Module):
             min_dim=min_dim
         )
         
-        # 协调器
+        # 协调器 - 需要处理可变维度的 adaptive_repr
+        # 使用 max_dim 作为协调器的基准维度
+        self.max_dim = max_dim
         self.coordinator = nn.Sequential(
-            nn.Linear(input_dim * 3, 512),
+            nn.Linear(input_dim + input_dim + max_dim, 512),
             nn.ReLU(),
             nn.Linear(512, input_dim)
         )
+
+        # 添加投影层将 adaptive_repr 投影到 max_dim
+        self.adaptive_repr_projector = nn.Linear(max_dim, max_dim)
     
     def forward(
         self,
@@ -83,10 +88,30 @@ class IntegratedPerceptionSystem(nn.Module):
         
         # 3. 自适应表征
         adaptive_repr, adaptation_info = self.adaptive_representation(next_state)
-        
-        # 4. 协调三层输出
+
+        # 4. 投影 adaptive_repr 到固定维度
+        # 如果 adaptive_repr 维度不是 max_dim，需要先投影
+        if adaptive_repr.size(-1) != self.max_dim:
+            # 创建一个临时投影层或填充
+            if adaptive_repr.size(-1) < self.max_dim:
+                # 填充到 max_dim
+                padding = torch.zeros(
+                    adaptive_repr.size(0),
+                    self.max_dim - adaptive_repr.size(-1),
+                    device=adaptive_repr.device
+                )
+                adaptive_repr_fixed = torch.cat([adaptive_repr, padding], dim=-1)
+            else:
+                # 裁剪到 max_dim
+                adaptive_repr_fixed = adaptive_repr[:, :self.max_dim]
+        else:
+            adaptive_repr_fixed = adaptive_repr
+
+        adaptive_repr_projected = self.adaptive_repr_projector(adaptive_repr_fixed)
+
+        # 5. 协调三层输出
         coordinated_output = self.coordinator(
-            torch.cat([enhanced_x, next_state, adaptive_repr], dim=-1)
+            torch.cat([enhanced_x, next_state, adaptive_repr_projected], dim=-1)
         )
         
         # 5. 收集所有信息

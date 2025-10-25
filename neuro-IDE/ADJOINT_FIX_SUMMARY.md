@@ -14,6 +14,9 @@
 5. **Temporal Control Layer 输入格式错误** - 状态预测器输入维度计算错误
 6. **Adaptive Representation Network 张量转换问题** - 初始投影层缺失和质量评估器维度不匹配
 
+### 集成系统相关
+7. **Integrated Perception System 协调器维度问题** - 自适应表征输出维度可变导致拼接失败
+
 ## 修复详情
 
 ### 1. 修复文件：`models/neural_ode_perturbation.py`
@@ -193,6 +196,44 @@ quality_score = self.quality_assessor(attended_repr)  # attended_repr 是 max_di
 3. `models/active_perception.py` - 主动感知层（修复掩码维度广播）
 4. `models/temporal_control.py` - 时间控制层（修复输入维度和干预效果计算）
 5. `models/adaptive_representation.py` - 自适应表征网络（修复投影层和质量评估）
+
+### 集成系统修复
+6. `models/integrated_perception_system.py` - 集成感知系统（修复协调器维度处理）
+
+### 7. 修复文件：`models/integrated_perception_system.py`
+
+**问题：** 协调器尝试拼接可变维度的张量
+
+```python
+# 修复前
+self.coordinator = nn.Sequential(
+    nn.Linear(input_dim * 3, 512),  # 假设所有维度都是 input_dim
+    ...
+)
+coordinated_output = self.coordinator(
+    torch.cat([enhanced_x, next_state, adaptive_repr], dim=-1)
+)  # adaptive_repr 维度可变，导致维度不匹配
+
+# 修复后
+# 添加投影层确保 adaptive_repr 维度固定
+self.max_dim = max_dim
+self.coordinator = nn.Sequential(
+    nn.Linear(input_dim + input_dim + max_dim, 512),
+    ...
+)
+self.adaptive_repr_projector = nn.Linear(max_dim, max_dim)
+
+# 处理可变维度
+if adaptive_repr.size(-1) != self.max_dim:
+    # 填充或裁剪到 max_dim
+    ...
+adaptive_repr_projected = self.adaptive_repr_projector(adaptive_repr_fixed)
+coordinated_output = self.coordinator(
+    torch.cat([enhanced_x, next_state, adaptive_repr_projected], dim=-1)
+)
+```
+
+**修改位置：** `models/integrated_perception_system.py:60-70, 92-115`
 
 ## 使用说明
 
