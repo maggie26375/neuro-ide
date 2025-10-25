@@ -62,73 +62,78 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
     
     def forward(self, batch: Dict[str, torch.Tensor], padded: bool = True) -> torch.Tensor:
         # 支持两种键名：ctrl_expressions 和 ctrl_cell_emb
-        ctrl_expressions = batch.get("ctrl_expressions", batch.get("ctrl_cell_emb"))  # [B*S, N_genes]
-        pert_emb = batch["pert_emb"]                 # [B, pert_dim]
+        ctrl_expressions = batch.get("ctrl_expressions", batch.get("ctrl_cell_emb"))
+        pert_emb = batch["pert_emb"]
+
+        # 检测输入数据的格式
+        # 数据可能是 2D [B*S, dim] 或 3D [B, S, dim]
+        if ctrl_expressions.dim() == 3:
+            # 输入已经是 3D [B, S, N_genes]
+            batch_size, seq_len, _ = ctrl_expressions.shape
+            is_3d_input = True
+
+            # Flatten 到 2D 以供 SE Encoder 处理
+            ctrl_expressions_2d = ctrl_expressions.reshape(-1, ctrl_expressions.shape[-1])
+        else:
+            # 输入是 2D [B*S, N_genes]
+            ctrl_expressions_2d = ctrl_expressions
+            is_3d_input = False
 
         # 1. SE Encoder: 基因表达 -> 状态嵌入
-        initial_states_flat = self.encode_cells_to_state(ctrl_expressions)  # [B*S, se_output_dim]
+        initial_states = self.encode_cells_to_state(ctrl_expressions_2d)  # [B*S, se_output_dim]
 
         # 如果使用 Neural ODE，映射到 ST 隐藏维度
         if self.use_neural_ode:
-            initial_states_flat = self.state_projection(initial_states_flat)  # [B*S, st_hidden_dim]
-
-        # DEBUG: 打印实际的形状
-        print(f"\nDEBUG forward:")
-        print(f"  ctrl_expressions.shape: {ctrl_expressions.shape}")
-        print(f"  initial_states_flat.shape: {initial_states_flat.shape}")
-        print(f"  pert_emb.shape: {pert_emb.shape}")
-        print(f"  padded: {padded}")
-        print(f"  st_cell_set_len: {self.st_cell_set_len}")
-
-        # 处理 pert_emb 维度
-        # 检查 pert_emb 是否已经被扩展成 [B*S, pert_dim]
-        if pert_emb.shape[0] == initial_states_flat.shape[0]:
-            # pert_emb 已经被扩展了，需要恢复到 [B, pert_dim]
-            # 使用 st_cell_set_len 来确定真实的 batch_size
-            if padded:
-                # 检查是否样本数小于 st_cell_set_len（验证集可能较小）
-                if initial_states_flat.shape[0] < self.st_cell_set_len:
-                    # 样本数小于 st_cell_set_len，说明这是一个小批次
-                    # 此时所有细胞可能共享同一个 perturbation
-                    batch_size = 1
-                    pert_emb = pert_emb[0:1]
-                else:
-                    batch_size = initial_states_flat.shape[0] // self.st_cell_set_len
-                    # 每隔 st_cell_set_len 取一个 perturbation（它们应该是重复的）
-                    pert_emb = pert_emb[::self.st_cell_set_len]  # [B*S, pert_dim] -> [B, pert_dim]
-            else:
-                # 如果不是 padded，假设所有细胞共享同一个 perturbation
-                batch_size = 1
-                pert_emb = pert_emb[0:1]
-        elif pert_emb.dim() == 1:
-            pert_emb = pert_emb.unsqueeze(0)  # [pert_dim] -> [1, pert_dim]
-            batch_size = 1
-        else:
-            # pert_emb 是正确的 [B, pert_dim] 形状
-            batch_size = pert_emb.shape[0]
-
-        cell_sentence_len = initial_states_flat.shape[0] // batch_size
+            initial_states = self.state_projection(initial_states)  # [B*S, st_hidden_dim]
 
         if self.use_neural_ode:
-            # 2. Reshape 到 3D [batch, seq_len, state_dim]
-            # Neural ODE 现在支持 3D 输入，保留序列结构
-            initial_states_3d = initial_states_flat.reshape(batch_size, cell_sentence_len, self.st_hidden_dim)
+            # 处理 3D 输入的情况
+            if is_3d_input:
+                # 数据已经是 3D 格式
+                # Reshape initial_states 回 3D
+                initial_states_3d = initial_states.reshape(batch_size, seq_len, self.st_hidden_dim)
 
-            # pert_emb 保持 2D [batch, pert_dim]
-            # Neural ODE 会在内部扩展到每个细胞
+                # 处理 pert_emb: [B, S, pert_dim_full] -> [B, pert_dim]
+                # 取每个 batch 的第一个样本（假设同一 batch 的 perturbation 相同）
+                if pert_emb.dim() == 3:
+                    pert_emb_2d = pert_emb[:, 0, :self.pert_dim]  # [B, pert_dim]
+                elif pert_emb.dim() == 2:
+                    pert_emb_2d = pert_emb[:, :self.pert_dim]  # [B, pert_dim]
+                else:
+                    pert_emb_2d = pert_emb[:self.pert_dim].unsqueeze(0)  # [1, pert_dim]
+            else:
+                # 数据是 2D 格式，需要推断 batch_size
+                # 根据 pert_emb 的形状判断
+                if pert_emb.shape[0] == initial_states.shape[0]:
+                    # pert_emb 也是 [B*S, pert_dim]
+                    batch_size = initial_states.shape[0] // self.st_cell_set_len
+                    seq_len = self.st_cell_set_len
+                    pert_emb_2d = pert_emb[::seq_len, :self.pert_dim]  # [B, pert_dim]
+                else:
+                    # pert_emb 是 [B, pert_dim]
+                    batch_size = pert_emb.shape[0]
+                    seq_len = initial_states.shape[0] // batch_size
+                    pert_emb_2d = pert_emb[:, :self.pert_dim] if pert_emb.dim() == 2 else pert_emb[:self.pert_dim].unsqueeze(0)
+
+                # Reshape 到 3D
+                initial_states_3d = initial_states.reshape(batch_size, seq_len, self.st_hidden_dim)
 
             # 3. Neural ODE: 学习细胞群体的状态演化（支持细胞间交互）
-            predictions = self.neural_ode_model(
+            predictions_3d = self.neural_ode_model(
                 initial_states_3d,      # [batch, seq_len, state_dim]
-                pert_emb                # [batch, pert_dim]
+                pert_emb_2d             # [batch, pert_dim]
             )  # 返回 [batch, seq_len, gene_dim]
 
             # 4. Flatten 回 2D 以匹配后续处理
-            predictions = predictions.reshape(-1, self.output_dim)  # [B*S, gene_dim]
+            predictions = predictions_3d.reshape(-1, self.output_dim)  # [B*S, gene_dim]
         else:
-            # 使用原有 ST 模型
-            pert_emb_expanded = pert_emb.unsqueeze(1).repeat(1, cell_sentence_len, 1).reshape(-1, self.pert_dim)
-            predictions = self.st_model(initial_states_flat, pert_emb_expanded)
+            # 使用原有 ST 模型（2D 处理）
+            if is_3d_input:
+                initial_states = initial_states.reshape(-1, initial_states.shape[-1])
+                if pert_emb.dim() == 3:
+                    pert_emb = pert_emb.reshape(-1, pert_emb.shape[-1])
+
+            predictions = self.st_model(initial_states, pert_emb)
 
         return predictions
     
