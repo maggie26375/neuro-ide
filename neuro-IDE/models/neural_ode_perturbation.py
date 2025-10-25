@@ -202,6 +202,11 @@ class NeuralODEPerturbationModel(nn.Module):
         batch_size = initial_states.shape[0]
         device = initial_states.device
 
+        print(f"DEBUG NeuralODE forward:")
+        print(f"  initial_states.shape: {initial_states.shape}")
+        print(f"  perturbation_emb.shape: {perturbation_emb.shape}")
+        print(f"  Expected: initial_states=[{batch_size}, {self.state_dim}]")
+
         # 将时间点移到设备上
         time_points = self.time_points.to(device)
 
@@ -213,6 +218,7 @@ class NeuralODEPerturbationModel(nn.Module):
                 self.pert_emb = pert_emb
 
             def forward(self, t, x):
+                print(f"  ODEWrapper called: t={t.item() if t.dim()==0 else t.shape}, x.shape={x.shape}")
                 return self.ode_func(t, x, self.pert_emb)
 
         ode_wrapper = ODEWrapper(self.ode_func, perturbation_emb)
