@@ -78,10 +78,18 @@ class PerturbationODEFunc(nn.Module):
         # 获取正确的批次大小（在 reshape 之后）
         batch_size = x.shape[0]
 
-        # 确保 pert_emb 的批次大小与 x 匹配
+        # 确保 pert_emb 的批次大小与 x 匹配，并且维度正确
         if pert_emb.shape[0] != batch_size:
-            # 如果批次大小不匹配，扩展 pert_emb
+            # 如果批次大小不匹配，需要扩展 pert_emb
+            # 但首先确保 pert_emb 的最后一维是 pert_dim
+            if pert_emb.shape[-1] != self.pert_dim:
+                # pert_emb 维度不对，可能是多个 pert_emb 拼接在一起
+                # 只取前 pert_dim 维
+                pert_emb = pert_emb[:, :self.pert_dim]
             pert_emb = pert_emb.expand(batch_size, -1)
+        elif pert_emb.shape[-1] != self.pert_dim:
+            # 批次大小匹配，但维度不对
+            pert_emb = pert_emb[:, :self.pert_dim]
 
         # 处理时间维度（在确定最终 batch_size 之后）
         if t.dim() == 0:  # 标量时间
