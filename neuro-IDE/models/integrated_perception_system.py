@@ -36,7 +36,21 @@ class IntegratedPerceptionSystem(nn.Module):
         intervention_dim: int = 128
     ):
         super().__init__()
-        
+
+        # 存储参数
+        self.input_dim = input_dim
+        self.feature_dim = feature_dim
+        self.num_features = num_features
+
+        # 内部特征生成器 - 从输入自动生成特征
+        self.feature_generators = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(input_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, feature_dim)
+            ) for _ in range(num_features)
+        ])
+
         # 三层系统
         self.active_perception = ActivePerceptionLayer(
             input_dim=input_dim,
@@ -69,15 +83,47 @@ class IntegratedPerceptionSystem(nn.Module):
         # 添加投影层将 adaptive_repr 投影到 max_dim
         self.adaptive_repr_projector = nn.Linear(max_dim, max_dim)
     
+    def _generate_features(self, x: torch.Tensor) -> List[torch.Tensor]:
+        """
+        从输入自动生成特征
+
+        Args:
+            x: 输入状态 [batch_size, input_dim]
+
+        Returns:
+            available_features: 特征列表，每个特征为 [batch_size, feature_dim]
+        """
+        available_features = []
+        for generator in self.feature_generators:
+            feature = generator(x)  # [batch_size, feature_dim]
+            available_features.append(feature)
+        return available_features
+
     def forward(
         self,
         x: torch.Tensor,
         temporal_sequence: torch.Tensor,
-        available_features: List[torch.Tensor],
+        available_features: Optional[List[torch.Tensor]] = None,
         intervention_history: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        """前向传播"""
-        
+        """
+        前向传播 - 自包含设计
+
+        Args:
+            x: 输入状态 [batch_size, input_dim]
+            temporal_sequence: 时间序列 [batch_size, seq_len, input_dim]
+            available_features: 可选的外部特征列表，如果为None则自动生成
+            intervention_history: 干预历史 [batch_size, seq_len, intervention_dim]
+
+        Returns:
+            coordinated_output: 协调后的输出
+            system_info: 系统信息
+        """
+
+        # 0. 生成或使用外部特征
+        if available_features is None:
+            available_features = self._generate_features(x)
+
         # 1. 主动感知
         enhanced_x, perception_info = self.active_perception(x, available_features)
         

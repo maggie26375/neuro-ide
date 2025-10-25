@@ -16,6 +16,7 @@
 
 ### 集成系统相关
 7. **Integrated Perception System 协调器维度问题** - 自适应表征输出维度可变导致拼接失败
+8. **Integrated Perception System 特征生成问题** - 缺少内部特征生成器，依赖外部特征输入
 
 ## 修复详情
 
@@ -234,6 +235,47 @@ coordinated_output = self.coordinator(
 ```
 
 **修改位置：** `models/integrated_perception_system.py:60-70, 92-115`
+
+### 8. 修复文件：`models/integrated_perception_system.py` (特征生成)
+
+**问题：** 系统依赖外部提供 `available_features`，不是自包含设计
+
+```python
+# 修复前
+def forward(self, x, temporal_sequence, available_features, ...):
+    # 必须从外部传入 available_features
+    enhanced_x, _ = self.active_perception(x, available_features)
+    # 问题：用户必须手动生成特征，维度容易出错
+
+# 修复后
+def __init__(self, ...):
+    # 添加内部特征生成器
+    self.feature_generators = nn.ModuleList([
+        nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, feature_dim)
+        ) for _ in range(num_features)
+    ])
+
+def _generate_features(self, x):
+    """从输入自动生成特征"""
+    return [generator(x) for generator in self.feature_generators]
+
+def forward(self, x, temporal_sequence, available_features=None, ...):
+    # 自动生成特征，也支持外部特征
+    if available_features is None:
+        available_features = self._generate_features(x)
+    enhanced_x, _ = self.active_perception(x, available_features)
+```
+
+**优势：**
+- ✅ 自包含设计：无需外部特征
+- ✅ 灵活接口：仍支持外部特征
+- ✅ 维度正确：每个特征 `[batch_size, feature_dim]`
+- ✅ 避免错误：自动处理维度匹配
+
+**修改位置：** `models/integrated_perception_system.py:40-52, 86-125`
 
 ## 使用说明
 
