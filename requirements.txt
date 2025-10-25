@@ -39,6 +39,9 @@ pyyaml>=6.0
 # Geometric loss for optimal transport
 geomloss>=0.2.4
 
+# Neural ODE support
+torchdiffeq>=0.2.3
+
 # Transformers for model backbones
 transformers>=4.20.0
 accelerate>=0.20.0
