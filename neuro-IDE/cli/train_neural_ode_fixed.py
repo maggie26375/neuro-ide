@@ -101,7 +101,7 @@ def train_neural_ode(
         val_check_interval=0.5,
         gradient_clip_val=1.0,
         precision=16,
-        devices=1,
+        devices="auto",  # 自动检测可用设备
         accelerator="gpu"
     )
     
