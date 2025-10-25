@@ -152,7 +152,16 @@ class PerturbationDataset(Dataset):
         
         # Load perturbation embeddings (ESM2 features)
         self.pert_embedding_map = self._load_perturbation_embeddings()
-        
+
+        # Compute mean embedding for fallback (when perturbation not found)
+        if len(self.pert_embedding_map) > 0:
+            all_embeddings = torch.stack(list(self.pert_embedding_map.values()))
+            self.mean_embedding = all_embeddings.mean(dim=0)
+            logger.info(f"✅ Computed mean embedding with shape {self.mean_embedding.shape} for fallback")
+        else:
+            self.mean_embedding = None
+            logger.warning("No embeddings loaded - fallback embedding will be None!")
+
         # Storage for sentence metadata (indices only, not data!)
         # Each item: {h5_path, data_key, pert_indices, ctrl_indices, pert_emb, metadata}
         self.sentence_specs: List[Dict] = []
@@ -407,28 +416,36 @@ class PerturbationDataset(Dataset):
     def _get_pert_embedding(self, pert_name: str) -> Optional[torch.Tensor]:
         """
         Get perturbation embedding by name.
-        Handles case variations and missing embeddings.
+        Handles case variations and uses mean embedding as fallback for missing perturbations.
+
+        This ensures validation/test sets don't get empty even if some perturbations
+        (like TAZ, YAP1) are missing from the ESM2 embedding file.
         """
         # Try exact match first
         if pert_name in self.pert_embedding_map:
             return self.pert_embedding_map[pert_name]
-        
+
         # Try case variations
         for key in self.pert_embedding_map.keys():
             if key.lower() == pert_name.lower():
                 logger.debug(f"Found embedding for '{pert_name}' using case-insensitive match: '{key}'")
                 return self.pert_embedding_map[key]
-        
+
         # Try uppercase (common for gene names)
         if pert_name.upper() in self.pert_embedding_map:
             return self.pert_embedding_map[pert_name.upper()]
-        
+
         # Try lowercase
         if pert_name.lower() in self.pert_embedding_map:
             return self.pert_embedding_map[pert_name.lower()]
-        
-        logger.warning(f"No embedding found for '{pert_name}', skipping")
-        return None
+
+        # Fallback: use mean embedding
+        if self.mean_embedding is not None:
+            logger.warning(f"⚠️ No embedding found for '{pert_name}', using mean embedding as fallback")
+            return self.mean_embedding
+        else:
+            logger.warning(f"❌ No embedding found for '{pert_name}' and no fallback available, skipping")
+            return None
     
     def __len__(self) -> int:
         return len(self.sentence_specs)
