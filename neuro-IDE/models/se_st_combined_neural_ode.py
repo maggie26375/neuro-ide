@@ -34,6 +34,16 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         self.use_neural_ode = use_neural_ode
         
         if self.use_neural_ode:
+            # 获取 SE 模型的输出维度
+            # SE 模型输出的是 state_dim，我们需要将其映射到 st_hidden_dim
+            self.se_output_dim = self.state_dim if hasattr(self, 'state_dim') else 512
+
+            # 如果 SE 输出维度与 ST 隐藏维度不同，添加映射层
+            if self.se_output_dim != self.st_hidden_dim:
+                self.state_projection = nn.Linear(self.se_output_dim, self.st_hidden_dim)
+            else:
+                self.state_projection = nn.Identity()
+
             # 替换 ST 模型为 Neural ODE 模型
             self.neural_ode_model = NeuralODEPerturbationModel(
                 state_dim=self.st_hidden_dim,
@@ -44,7 +54,7 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
                 time_range=time_range,
                 num_time_points=num_time_points
             )
-            
+
             # 禁用原有 ST 模型
             self.st_model = None
     
@@ -54,7 +64,11 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         pert_emb = batch["pert_emb"]                 # 可能是 [B, pert_dim] 或 [B*S, pert_dim]
 
         # 1. SE Encoder: 基因表达 -> 状态嵌入
-        initial_states = self.encode_cells_to_state(ctrl_expressions)  # [B*S, state_dim]
+        initial_states = self.encode_cells_to_state(ctrl_expressions)  # [B*S, se_output_dim]
+
+        # 如果使用 Neural ODE，映射到 ST 隐藏维度
+        if self.use_neural_ode:
+            initial_states = self.state_projection(initial_states)  # [B*S, st_hidden_dim]
 
         # 处理扰动嵌入的维度
         # 检查 pert_emb 是否已经扩展到与 ctrl_expressions 相同的批次大小
@@ -73,11 +87,11 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
 
             pert_emb_expanded = pert_emb.unsqueeze(1).repeat(1, cell_sentence_len, 1)
             pert_emb_expanded = pert_emb_expanded.reshape(-1, self.pert_dim)
-        
+
         if self.use_neural_ode:
             # 2. Neural ODE: 学习状态演化
             predictions = self.neural_ode_model(
-                initial_states, 
+                initial_states,
                 pert_emb_expanded
             )
         else:
@@ -106,6 +120,9 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
 
         initial_states = self.encode_cells_to_state(ctrl_expressions)
 
+        # 映射到 ST 隐藏维度
+        initial_states = self.state_projection(initial_states)
+
         # 处理扰动嵌入
         if pert_emb.shape[0] == initial_states.shape[0]:
             # 已经扩展，直接使用
@@ -121,10 +138,10 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
 
             pert_emb_expanded = pert_emb.unsqueeze(1).repeat(1, cell_sentence_len, 1)
             pert_emb_expanded = pert_emb_expanded.reshape(-1, self.pert_dim)
-        
+
         # 获取完整轨迹
         trajectory = self.neural_ode_model(
-            initial_states, 
+            initial_states,
             pert_emb_expanded,
             return_trajectory=True
         )
