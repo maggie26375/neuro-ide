@@ -25,27 +25,30 @@ def load_neural_ode_model(
 ) -> SE_ST_NeuralODE_Model:
     """
     加载训练好的 Neural ODE 模型
-    
+
     Args:
         checkpoint_path: 检查点路径
         device: 设备
-    
+
     Returns:
         加载的模型
     """
-    # 加载检查点
+    # 加载检查点到指定设备
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    
+
     # 获取模型参数
     model_kwargs = checkpoint['hyper_parameters']
-    
+
     # 创建模型
     model = SE_ST_NeuralODE_Model(**model_kwargs)
-    
+
     # 加载权重
     model.load_state_dict(checkpoint['state_dict'])
+
+    # 将模型移到指定设备
+    model = model.to(device)
     model.eval()
-    
+
     return model
 
 def run_neural_ode_inference(
