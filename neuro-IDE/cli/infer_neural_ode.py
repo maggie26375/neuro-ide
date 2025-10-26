@@ -52,6 +52,12 @@ def load_neural_ode_model(
     # 特别是 SE 模型可能需要额外处理
     if hasattr(model, 'se_model') and model.se_model is not None:
         model.se_model = model.se_model.to(device)
+        # 确保 SE 模型的 encoder 也在正确的设备上
+        if hasattr(model.se_model, 'encoder'):
+            model.se_model.encoder = model.se_model.encoder.to(device)
+
+    # 再次确保整个模型在正确的设备上
+    model = model.to(device)
 
     model.eval()
 
@@ -66,35 +72,41 @@ def run_neural_ode_inference(
 ) -> Tuple[ad.AnnData, Optional[torch.Tensor]]:
     """
     运行 Neural ODE 推理
-    
+
     Args:
         model: 训练好的模型
         ctrl_data: 控制组数据
         pert_emb: 扰动嵌入
         batch_size: 批次大小
         return_trajectory: 是否返回轨迹
-    
+
     Returns:
         predictions: 预测结果
         trajectory: 扰动轨迹（可选）
     """
     model.eval()
 
+    # 获取模型所在的设备
+    device = next(model.parameters()).device
+
     with torch.no_grad():
         # 准备数据 - 处理稀疏矩阵和密集矩阵
         if hasattr(ctrl_data.X, 'toarray'):
             # 稀疏矩阵
-            ctrl_expressions = torch.tensor(ctrl_data.X.toarray(), dtype=torch.float32)
+            ctrl_expressions = torch.tensor(ctrl_data.X.toarray(), dtype=torch.float32, device=device)
         else:
             # 密集矩阵
-            ctrl_expressions = torch.tensor(ctrl_data.X, dtype=torch.float32)
-        
+            ctrl_expressions = torch.tensor(ctrl_data.X, dtype=torch.float32, device=device)
+
+        # 确保 pert_emb 也在正确的设备上
+        pert_emb = pert_emb.to(device)
+
         # 创建批次
         batch = {
             "ctrl_expressions": ctrl_expressions,
             "pert_emb": pert_emb
         }
-        
+
         # 运行推理
         if return_trajectory:
             predictions = model.get_perturbation_trajectory(batch)
@@ -102,14 +114,14 @@ def run_neural_ode_inference(
         else:
             predictions = model(batch)
             trajectory = None
-        
+
         # 转换为 AnnData
         pred_adata = ad.AnnData(
             X=predictions.cpu().numpy(),
             obs=ctrl_data.obs.copy(),
             var=ctrl_data.var.copy()
         )
-        
+
         return pred_adata, trajectory
 
 def analyze_perturbation_effects(
@@ -120,34 +132,40 @@ def analyze_perturbation_effects(
 ) -> Dict:
     """
     分析扰动效果
-    
+
     Args:
         model: 训练好的模型
         ctrl_data: 控制组数据
         pert_emb: 扰动嵌入
         perturbation_name: 扰动名称
-    
+
     Returns:
         分析结果
     """
+    # 获取模型所在的设备
+    device = next(model.parameters()).device
+
     # 准备批次 - 处理稀疏矩阵和密集矩阵
     if hasattr(ctrl_data.X, 'toarray'):
-        ctrl_expressions = torch.tensor(ctrl_data.X.toarray(), dtype=torch.float32)
+        ctrl_expressions = torch.tensor(ctrl_data.X.toarray(), dtype=torch.float32, device=device)
     else:
-        ctrl_expressions = torch.tensor(ctrl_data.X, dtype=torch.float32)
+        ctrl_expressions = torch.tensor(ctrl_data.X, dtype=torch.float32, device=device)
+
+    # 确保 pert_emb 也在正确的设备上
+    pert_emb = pert_emb.to(device)
 
     batch = {
         "ctrl_expressions": ctrl_expressions,
         "pert_emb": pert_emb
     }
-    
+
     # 分析扰动动力学
     analysis_results = analyze_perturbation_dynamics(
         model=model,
         batch=batch,
         perturbation_name=perturbation_name
     )
-    
+
     return analysis_results
 
 def main():
