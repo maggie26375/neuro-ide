@@ -40,7 +40,8 @@ def train_neural_ode(
     time_range: Tuple[float, float] = (0.0, 1.0),
     num_time_points: int = 10,
     se_model_path: str = "SE-600M",
-    se_checkpoint_path: str = "SE-600M/se600m_epoch15.ckpt"
+    se_checkpoint_path: str = "SE-600M/se600m_epoch15.ckpt",
+    resume_from_checkpoint: str = None
 ) -> SE_ST_NeuralODE_Model:
     """
     训练 Neural ODE 模型
@@ -109,10 +110,14 @@ def train_neural_ode(
         devices=1,
         accelerator="gpu"
     )
-    
+
     # 训练
-    trainer.fit(model, datamodule)
-    
+    if resume_from_checkpoint:
+        logger.info(f"Resuming training from checkpoint: {resume_from_checkpoint}")
+        trainer.fit(model, datamodule, ckpt_path=resume_from_checkpoint)
+    else:
+        trainer.fit(model, datamodule)
+
     return model
 
 def setup_callbacks():
@@ -144,10 +149,13 @@ def setup_callbacks():
 @hydra.main(version_base=None, config_path="../configs", config_name="neural_ode_config")
 def main(cfg: DictConfig) -> None:
     """主训练函数"""
-    
+
     # 设置日志
     logging.basicConfig(level=logging.INFO)
-    
+
+    # 获取 resume checkpoint 路径（如果有）
+    resume_ckpt = cfg.get("resume_from_checkpoint", None)
+
     # 训练模型
     model = train_neural_ode(
         data_dir=cfg.data.data_dir,
@@ -160,11 +168,12 @@ def main(cfg: DictConfig) -> None:
         time_range=tuple(cfg.model.time_range),
         num_time_points=cfg.model.num_time_points,
         se_model_path=cfg.model.se_model_path,
-        se_checkpoint_path=cfg.model.se_checkpoint_path
+        se_checkpoint_path=cfg.model.se_checkpoint_path,
+        resume_from_checkpoint=resume_ckpt
     )
-    
+
     logger.info("Training completed successfully!")
-    
+
     return model
 
 if __name__ == "__main__":
