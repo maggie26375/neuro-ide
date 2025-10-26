@@ -71,13 +71,13 @@ def run_neural_ode_inference(
     return_trajectory: bool = False
 ) -> Tuple[ad.AnnData, Optional[torch.Tensor]]:
     """
-    运行 Neural ODE 推理
+    运行 Neural ODE 推理（分批处理以避免内存溢出）
 
     Args:
         model: 训练好的模型
         ctrl_data: 控制组数据
         pert_emb: 扰动嵌入
-        batch_size: 批次大小
+        batch_size: 批次大小（每批处理的细胞数量）
         return_trajectory: 是否返回轨迹
 
     Returns:
@@ -89,40 +89,85 @@ def run_neural_ode_inference(
     # 获取模型所在的设备
     device = next(model.parameters()).device
 
+    # 获取训练时使用的 cell_set_len
+    cell_set_len = model.st_cell_set_len if hasattr(model, 'st_cell_set_len') else 128
+
+    # 准备数据 - 处理稀疏矩阵和密集矩阵
+    if hasattr(ctrl_data.X, 'toarray'):
+        # 稀疏矩阵
+        ctrl_expressions_np = ctrl_data.X.toarray()
+    else:
+        # 密集矩阵
+        ctrl_expressions_np = ctrl_data.X
+
+    num_cells = ctrl_expressions_np.shape[0]
+    logger.info(f"Processing {num_cells} cells in batches of {cell_set_len}")
+
+    # 确保 pert_emb 也在正确的设备上
+    pert_emb = pert_emb.to(device)
+
+    all_predictions = []
+
     with torch.no_grad():
-        # 准备数据 - 处理稀疏矩阵和密集矩阵
-        if hasattr(ctrl_data.X, 'toarray'):
-            # 稀疏矩阵
-            ctrl_expressions = torch.tensor(ctrl_data.X.toarray(), dtype=torch.float32, device=device)
-        else:
-            # 密集矩阵
-            ctrl_expressions = torch.tensor(ctrl_data.X, dtype=torch.float32, device=device)
+        # 分批处理细胞
+        for start_idx in range(0, num_cells, cell_set_len):
+            end_idx = min(start_idx + cell_set_len, num_cells)
+            batch_cells = ctrl_expressions_np[start_idx:end_idx]
 
-        # 确保 pert_emb 也在正确的设备上
-        pert_emb = pert_emb.to(device)
+            # 如果最后一批不足 cell_set_len，需要 padding
+            actual_cells = batch_cells.shape[0]
+            if actual_cells < cell_set_len:
+                # Pad with zeros
+                padding = np.zeros((cell_set_len - actual_cells, batch_cells.shape[1]))
+                batch_cells = np.vstack([batch_cells, padding])
 
-        # 创建批次
-        batch = {
-            "ctrl_expressions": ctrl_expressions,
-            "pert_emb": pert_emb
-        }
+            # 转换为张量并移到设备
+            ctrl_expressions = torch.tensor(batch_cells, dtype=torch.float32, device=device)
 
-        # 运行推理
+            # Reshape 到 3D: [1, cell_set_len, gene_dim]
+            ctrl_expressions = ctrl_expressions.unsqueeze(0)
+
+            # 创建批次
+            batch = {
+                "ctrl_expressions": ctrl_expressions,
+                "pert_emb": pert_emb
+            }
+
+            # 运行推理
+            if return_trajectory:
+                batch_predictions = model.get_perturbation_trajectory(batch)
+                # 只取实际的细胞数量
+                batch_predictions = batch_predictions[:, :, :actual_cells, :]
+            else:
+                batch_predictions = model(batch)
+                # batch_predictions shape: [1, cell_set_len, gene_dim]
+                # 只取实际的细胞数量
+                batch_predictions = batch_predictions[0, :actual_cells, :]
+
+            all_predictions.append(batch_predictions.cpu().numpy())
+
+            logger.info(f"Processed cells {start_idx} to {end_idx-1}")
+
+        # 合并所有批次的预测
         if return_trajectory:
-            predictions = model.get_perturbation_trajectory(batch)
-            trajectory = predictions
+            # trajectory: list of [time_points, 1, actual_cells, gene_dim]
+            trajectory = np.concatenate(all_predictions, axis=2)  # 在 cells 维度合并
         else:
-            predictions = model(batch)
+            # predictions: list of [actual_cells, gene_dim]
+            predictions = np.vstack(all_predictions)
             trajectory = None
 
-        # 转换为 AnnData
-        pred_adata = ad.AnnData(
-            X=predictions.cpu().numpy(),
-            obs=ctrl_data.obs.copy(),
-            var=ctrl_data.var.copy()
-        )
+            # 转换为 AnnData
+            pred_adata = ad.AnnData(
+                X=predictions,
+                obs=ctrl_data.obs.copy(),
+                var=ctrl_data.var.copy()
+            )
 
-        return pred_adata, trajectory
+            return pred_adata, trajectory
+
+        # 如果返回轨迹
+        return None, trajectory
 
 def analyze_perturbation_effects(
     model: SE_ST_NeuralODE_Model,
