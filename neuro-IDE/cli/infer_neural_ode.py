@@ -140,9 +140,11 @@ def run_neural_ode_inference(
                 batch_predictions = batch_predictions[:, :, :actual_cells, :]
             else:
                 batch_predictions = model(batch)
-                # batch_predictions shape: [1, cell_set_len, gene_dim]
+                # 注意：model.forward() 返回 2D [batch*seq, gene_dim]
+                # 因为在 se_st_combined_neural_ode.py 第 129 行有 reshape(-1, self.input_dim)
+                # 所以这里 batch_predictions 是 [cell_set_len, gene_dim]
                 # 只取实际的细胞数量
-                batch_predictions = batch_predictions[0, :actual_cells, :]
+                batch_predictions = batch_predictions[:actual_cells, :]
 
             all_predictions.append(batch_predictions.cpu().numpy())
 
