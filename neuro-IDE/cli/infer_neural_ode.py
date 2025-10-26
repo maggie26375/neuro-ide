@@ -42,11 +42,17 @@ def load_neural_ode_model(
     # 创建模型
     model = SE_ST_NeuralODE_Model(**model_kwargs)
 
+    # 先将模型移到指定设备（在加载权重前）
+    model = model.to(device)
+
     # 加载权重
     model.load_state_dict(checkpoint['state_dict'])
 
-    # 将模型移到指定设备
-    model = model.to(device)
+    # 确保所有子模块都在正确的设备上
+    # 特别是 SE 模型可能需要额外处理
+    if hasattr(model, 'se_model') and model.se_model is not None:
+        model.se_model = model.se_model.to(device)
+
     model.eval()
 
     return model
