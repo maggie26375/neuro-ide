@@ -70,10 +70,15 @@ def run_neural_ode_inference(
         trajectory: 扰动轨迹（可选）
     """
     model.eval()
-    
+
     with torch.no_grad():
-        # 准备数据
-        ctrl_expressions = torch.tensor(ctrl_data.X.toarray(), dtype=torch.float32)
+        # 准备数据 - 处理稀疏矩阵和密集矩阵
+        if hasattr(ctrl_data.X, 'toarray'):
+            # 稀疏矩阵
+            ctrl_expressions = torch.tensor(ctrl_data.X.toarray(), dtype=torch.float32)
+        else:
+            # 密集矩阵
+            ctrl_expressions = torch.tensor(ctrl_data.X, dtype=torch.float32)
         
         # 创建批次
         batch = {
@@ -116,9 +121,14 @@ def analyze_perturbation_effects(
     Returns:
         分析结果
     """
-    # 准备批次
+    # 准备批次 - 处理稀疏矩阵和密集矩阵
+    if hasattr(ctrl_data.X, 'toarray'):
+        ctrl_expressions = torch.tensor(ctrl_data.X.toarray(), dtype=torch.float32)
+    else:
+        ctrl_expressions = torch.tensor(ctrl_data.X, dtype=torch.float32)
+
     batch = {
-        "ctrl_expressions": torch.tensor(ctrl_data.X.toarray(), dtype=torch.float32),
+        "ctrl_expressions": ctrl_expressions,
         "pert_emb": pert_emb
     }
     
