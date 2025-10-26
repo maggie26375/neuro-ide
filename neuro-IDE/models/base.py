@@ -218,8 +218,13 @@ class PerturbationModel(ABC, LightningModule):
             return
         if not decoder_already_configured and "decoder_cfg" in checkpoint["hyper_parameters"]:
             self.decoder_cfg = checkpoint["hyper_parameters"]["decoder_cfg"]
-            self.gene_decoder = LatentToGeneDecoder(**self.decoder_cfg)
-            logger.info(f"Loaded decoder from checkpoint decoder_cfg: {self.decoder_cfg}")
+            if self.decoder_cfg is not None:
+                self.gene_decoder = LatentToGeneDecoder(**self.decoder_cfg)
+                logger.info(f"Loaded decoder from checkpoint decoder_cfg: {self.decoder_cfg}")
+            else:
+                # decoder_cfg存在但是None，使用旧逻辑
+                self._build_decoder()
+                logger.info("decoder_cfg is None, using fallback decoder building logic")
         elif not decoder_already_configured:
             # Only fall back to old logic if no decoder_cfg was saved and not externally configured
             self.decoder_cfg = None
