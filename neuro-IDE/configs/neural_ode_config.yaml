@@ -27,7 +27,11 @@ model:
   num_time_points: 10
   use_cell_attention: true  # 是否使用细胞间注意力机制
   num_attention_heads: 8     # 注意力头数
-  
+
+  # 损失函数配置
+  loss_fn: "energy"  # 可选: "energy", "sinkhorn", "mse"
+  blur: 0.05         # Energy/Sinkhorn loss 的 blur 参数
+
   # 训练参数
   lr: 1e-4
   batch_size: 16

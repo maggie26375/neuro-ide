@@ -10,6 +10,7 @@ import torch.nn as nn
 from typing import Dict, Tuple, Optional
 from .se_st_combined import SE_ST_CombinedModel
 from .neural_ode_perturbation import NeuralODEPerturbationModel
+from geomloss import SamplesLoss
 
 class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
     """
@@ -28,12 +29,26 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
         num_time_points: int = 10,
         use_cell_attention: bool = True,
         num_attention_heads: int = 8,
+        loss_fn: str = "energy",
+        blur: float = 0.05,
         **kwargs
     ):
         # 先调用父类初始化（会设置 self.state_dim）
         super().__init__(**kwargs)
 
         self.use_neural_ode = use_neural_ode
+
+        # 初始化 Energy Loss（如果使用 Neural ODE）
+        if self.use_neural_ode:
+            if loss_fn == "energy":
+                self.energy_loss_fn = SamplesLoss(loss="energy", blur=blur)
+            elif loss_fn == "sinkhorn":
+                self.energy_loss_fn = SamplesLoss(loss="sinkhorn", blur=blur)
+            elif loss_fn == "mse":
+                self.energy_loss_fn = None  # 使用 MSE
+            else:
+                raise ValueError(f"Unknown loss function: {loss_fn}")
+            self.loss_fn_type = loss_fn
 
         if self.use_neural_ode:
             # 父类初始化后，self.state_dim 已经被设置
@@ -251,13 +266,23 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
             target = target.reshape(1, -1, gene_dim)
 
         if self.use_neural_ode:
-            # 使用 Neural ODE 的损失函数
-            loss = torch.nn.functional.mse_loss(predictions, target)
+            # 使用配置的损失函数
+            if self.energy_loss_fn is not None:
+                # 使用 Energy Loss 或 Sinkhorn Loss
+                loss = self.energy_loss_fn(predictions, target).nanmean()
+            else:
+                # 使用 MSE Loss
+                loss = torch.nn.functional.mse_loss(predictions, target)
         else:
             # 使用原有 ST 模型的损失函数
             loss = self.st_model.loss_fn(predictions, target).nanmean()
 
         self.log("train_loss", loss)
+
+        # 记录损失函数类型
+        if self.use_neural_ode:
+            self.log("train_loss_type", hash(self.loss_fn_type) % 1000, prog_bar=False)
+
         return loss
     
     def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int, padded: bool = True) -> torch.Tensor:
@@ -290,8 +315,13 @@ class SE_ST_NeuralODE_Model(SE_ST_CombinedModel):
             target = target.reshape(1, -1, gene_dim)
 
         if self.use_neural_ode:
-            # 使用 Neural ODE 的损失函数
-            loss = torch.nn.functional.mse_loss(predictions, target)
+            # 使用配置的损失函数
+            if self.energy_loss_fn is not None:
+                # 使用 Energy Loss 或 Sinkhorn Loss
+                loss = self.energy_loss_fn(predictions, target).nanmean()
+            else:
+                # 使用 MSE Loss
+                loss = torch.nn.functional.mse_loss(predictions, target)
         else:
             # 使用原有 ST 模型的损失函数
             loss = self.st_model.loss_fn(predictions, target).nanmean()

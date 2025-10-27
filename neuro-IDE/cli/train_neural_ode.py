@@ -41,7 +41,9 @@ def train_neural_ode(
     num_time_points: int = 10,
     se_model_path: str = "SE-600M",
     se_checkpoint_path: str = "SE-600M/se600m_epoch15.ckpt",
-    resume_from_checkpoint: str = None
+    resume_from_checkpoint: str = None,
+    loss_fn: str = "energy",
+    blur: float = 0.05
 ) -> SE_ST_NeuralODE_Model:
     """
     训练 Neural ODE 模型
@@ -79,7 +81,9 @@ def train_neural_ode(
         ode_layers=ode_layers,
         time_range=time_range,
         num_time_points=num_time_points,
-        lr=lr
+        lr=lr,
+        loss_fn=loss_fn,
+        blur=blur
     )
     
     # 创建数据模块
@@ -169,7 +173,9 @@ def main(cfg: DictConfig) -> None:
         num_time_points=cfg.model.num_time_points,
         se_model_path=cfg.model.se_model_path,
         se_checkpoint_path=cfg.model.se_checkpoint_path,
-        resume_from_checkpoint=resume_ckpt
+        resume_from_checkpoint=resume_ckpt,
+        loss_fn=cfg.model.get("loss_fn", "energy"),
+        blur=cfg.model.get("blur", 0.05)
     )
 
     logger.info("Training completed successfully!")
